@@ -920,6 +920,9 @@ void script_project_open(char *path) {
 		return;
 	}
 	path = script_resolve_path(path);
+#ifdef IRON_WINDOWS
+	path = string_replace_all(path, "/", "\\");
+#endif
 	gpu_texture_t *current;
 	bool           in_use;
 	script_gpu_begin(&current, &in_use);

@@ -72,6 +72,8 @@ application data directory. Use disposable copies for destructive workflow tests
 
 ```powershell
 .\paint\tests\smoke-windows.ps1
+.\paint\tests\save-windows.ps1
+.\paint\tests\save-windows.ps1 -SkipNative  # writer/lifecycle checks without a GPU
 git diff --check
 ```
 
@@ -83,6 +85,26 @@ paths for both formats. Import checks require actual named objects or the expect
 not only exit code zero. Each process has a 30-second limit. Logs, executable hash
 and `results.json` remain available. An alternate binary can be supplied with
 `-Executable`; runtime data still comes from this checkout's `paint/build/out/data`.
+
+The save suite compiles the production byte writer and deferred save lifecycle
+with controlled I/O and dialog results, using the installed Clang tools. It
+checks short writes, flush/sync/close/replace failures, real locked/read-only
+files, unique sibling collisions, Save As/cancel/retry behavior and quit intent.
+A separate process terminates during a partial write: the previous file must
+remain intact, and its partial sibling is retained as evidence. No GPU is needed
+for these checks (`-SkipNative`).
+
+The full save command also uses a disposable hidden native runtime. It checks
+missing-parent/locked/read-only failures, dirty titles and recent files, successful
+replacement, fresh-process reopen with named layers/materials, external/packed
+textures and a timeline keyframe, matching PNG exports before/after reopen, and
+successful save-and-quit. Packed reopening removes the external fixture first.
+Each native process has the same 30-second limit as the smoke suite. The runner
+requires explicit assertion markers and output evidence; script exit zero alone
+is insufficient. Per-check logs, hashes and `results.json` stay under
+`paint/build/tests/save-<id>/`. Native file-picker interaction, physical full-disk
+and power-loss behavior, other platforms and browser/cloud completion are not
+qualified by these checks.
 
 Other existing checks have narrower or different purposes:
 

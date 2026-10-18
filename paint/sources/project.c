@@ -1,7 +1,7 @@
 
 #include "global.h"
 
-bool _project_save_and_quit;
+#include "project_save.c"
 bool _project_import_mesh_replace_existing;
 void (*_project_import_mesh_done)(void);
 bool     _project_import_asset_hdr_as_envmap;
@@ -27,65 +27,6 @@ void project_open_on_file_picked(char *path) {
 
 void project_open() {
 	ui_files_show("arm", false, false, &project_open_on_file_picked);
-}
-
-void project_save_on_next_frame(void *_) {
-	export_arm_run_project(g_project->_->filepath);
-	if (_project_save_and_quit) {
-		iron_stop();
-	}
-}
-
-void project_save(bool save_and_quit) {
-	if (agent_running) {
-		return;
-	}
-
-#ifdef IRON_WASM
-	if (!box_projects_is_cloud_path(g_project->_->filepath) && !starts_with(g_project->_->filepath, "/files/")) {
-		box_projects_cloud_save_show(save_and_quit);
-		return;
-	}
-#endif
-
-	if (string_equals(g_project->_->filepath, "")) {
-#ifdef IRON_IOS
-		char *document_directory = iron_save_dialog("", "");
-		document_directory       = string_copy(substring(document_directory, 0, string_length(document_directory) - 8)); // Strip /"untitled"
-		g_project->_->filepath   = string("%s/%s.arm", document_directory, sys_title());
-#elif defined(IRON_ANDROID)
-		g_project->_->filepath = string("%s/%s.arm", iron_internal_save_path(), sys_title());
-#else
-		project_save_as(save_and_quit);
-		return;
-#endif
-	}
-
-#if defined(IRON_WINDOWS) || defined(IRON_LINUX) || defined(IRON_MACOS) || defined(IRON_WASM)
-	char *filename = substring(g_project->_->filepath, string_last_index_of(g_project->_->filepath, PATH_SEP) + 1, string_length(g_project->_->filepath) - 4);
-	sys_title_set(string("%s - %s", filename, manifest_title));
-#endif
-
-	_project_save_and_quit = save_and_quit;
-
-	sys_notify_on_next_frame(&project_save_on_next_frame, NULL);
-}
-
-void project_save_as_on_file_picked(char *path) {
-	char *f = ui_files_filename;
-	if (string_equals(f, "")) {
-		f = string_copy(tr("untitled"));
-	}
-	g_project->_->filepath = string("%s%s%s", path, PATH_SEP, f);
-	if (!ends_with(g_project->_->filepath, ".arm")) {
-		g_project->_->filepath = string("%s.arm", g_project->_->filepath);
-	}
-	project_save(_project_save_and_quit);
-}
-
-void project_save_as(bool save_and_quit) {
-	_project_save_and_quit = save_and_quit;
-	ui_files_show("arm", true, false, &project_save_as_on_file_picked);
 }
 
 void project_cleanup() {
@@ -134,6 +75,7 @@ void project_new_resize_layers(void *_) {
 }
 
 void project_new(bool reset_layers) {
+	++_project_save_generation;
 	if (g_context->paint_object != NULL) {
 		project_cleanup();
 		g_project->_->filepath = "";

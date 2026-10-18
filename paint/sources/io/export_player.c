@@ -118,8 +118,11 @@ void export_player_run(char *path) {
 
 	bool _pack_assets_on_save      = g_context->pack_assets_on_save;
 	g_context->pack_assets_on_save = true;
-	export_arm_run_project(string("%s/%s", path_base, "start.arm"));
+	bool saved = export_arm_run_project(string("%s/%s", path_base, "start.arm"));
 	g_context->pack_assets_on_save = _pack_assets_on_save;
+	if (!saved) {
+		return;
+	}
 
 	if (box_export_player_target == PLAYER_TARGET_WEB) {
 		char *files[] = {"start.js", "start.wasm", "worker.js", "audio_worklet.js"};

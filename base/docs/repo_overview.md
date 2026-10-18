@@ -21,11 +21,12 @@ Paths below are relative to the repository root.
 | `paint/sources/slots/`, `history.c`, `util/util_layer.c` | Layer/material/brush resources, layer operations and undo/redo |
 | `paint/sources/render/`, `parser_material.c`, `node_shader.c` | Painting, render paths, shader generation and material compilation |
 | `paint/sources/nodes_*` | Brush, material, mesh and neural node implementations |
-| `paint/sources/io/`, `project.c`, `util/util_encode.c` | Import/export, project lifecycle and `.arm` encoding |
+| `paint/sources/io/`, `project.c`, `project_save.c`, `util/util_encode.c` | Import/export, project lifecycle, deferred save completion and `.arm` encoding |
 | `paint/plugins/` | Native format readers (including FBX, glTF, SVG, TIFF and EXR) |
 | `paint/sources/minic_{api,impl}.c`, `minic_api_list.h`, `agent.c`, `args.c` | Script API, editor automation, CLI and local MCP bridge |
 | `paint/assets/`, `paint/shaders/` | Shipped presets, locale text, scripts, meshes and application shaders |
 | `base/sources/engine.c`, `iron_*.c`, `backends/` | Scene/assets, memory utilities, UI/input/files, GPU and platform backends |
+| `base/sources/iron_file_write.c` | Checked byte writes and native project replacement through a unique sibling file |
 | `base/sources/libs/`, `kong/` | Bundled libraries, minic interpreter and shader compiler |
 | `base/tools/amake/`, `base/tools/bin/` | Build-tool source and checked-in platform binaries |
 | `base/tools/tcc/`, `iris/`, `pad/` | Optional compiler/tool sources; not the normal Windows app toolchain |
@@ -35,6 +36,8 @@ the engine and native plug-ins. Most application modules are included by `main.c
 adding them separately to the project would duplicate definitions. State is shared
 through `g_project`, `g_context`, `g_config` and related globals. This is an
 established design, not a recommendation to split it into new abstraction layers.
+`project.c` includes `project_save.c`; do not add the latter as a standalone app
+build input. Engine `iron_file_write.c` is compiled by the existing base wildcard.
 
 ## Main workflows
 
@@ -54,12 +57,20 @@ established design, not a recommendation to split it into new abstraction layers
    GPU layer targets; `slots/slot_layer.c` and `util/util_layer.c` manage layer
    resources. `history.c` records operation-specific state and texture snapshots.
    A change may affect both ordinary painting and fill/mask layers.
-4. **Save and reopen:** `project_save()` defers to `export_arm_run_project()`.
+4. **Save and reopen:** `project_save.c:project_save()` captures the destination
+   and quit intent, then defers to `export_arm_run_project()`.
    `export_arm_encode_project()` collects nodes, assets, layer pixels and timeline
    data; `util_encode.c`/armpack serialize it. `import_arm.c` and `import_legacy.c`
-   reconstruct state and compatibility data. Save currently lacks propagated
-   filesystem success; see review P1-01. Packed/external assets and legacy files
-   require separate compatibility checks.
+   reconstruct state and compatibility data. Native project writes use
+   `iron_file_save_bytes_atomic()`: exclusively create a sibling, check the full
+   write/flush/sync/close, then replace the destination. Failure retains the dirty
+   title, previous Save As filepath and recent files, and keeps the editor open.
+   Only success commits the new filepath, clears the title, reports saved and
+   honors save-and-quit. Save As asset references use the selected destination;
+   Windows serialization normalizes separators for relative references. Browser
+   disk/cloud writes retain their existing routing but report unconfirmed dispatch
+   and keep unsaved state/open because that bridge lacks a completion receipt.
+   See review P1-01 for verification and remaining platform/legacy limits.
 5. **Export:** `ui/box_export.c` and `args.c` select settings;
    `io/export_texture.c` flattens selected layers and applies channel/color-space
    mappings from `paint/assets/export_presets/`. PNG/JPG and EXR bit depths take

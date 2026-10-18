@@ -62,7 +62,9 @@ void  iron_create_directory(char *path);
 bool  iron_is_directory(char *path);
 bool  iron_file_exists(char *path);
 void  iron_delete_file(char *path);
-void  iron_file_save_bytes(char *path, buffer_t *bytes, u64 length);
+bool  iron_file_save_bytes(char *path, buffer_t *bytes, u64 length);
+// Native project saves: write/flush/close a unique sibling before replacing path.
+bool  iron_file_save_bytes_atomic(char *path, buffer_t *bytes, u64 length);
 void  iron_file_download(char *url, void (*callback)(char *, buffer_t *), i32 size, char *dst_path);
 
 typedef struct file_download_data {

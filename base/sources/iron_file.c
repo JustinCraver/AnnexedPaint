@@ -416,25 +416,6 @@ void iron_delete_file(char *path) {
 #endif
 }
 
-void iron_file_save_bytes(char *path, buffer_t *bytes, u64 length) {
-	u64 byte_length = length > 0 ? length : (u64)bytes->length;
-	if (byte_length > (u64)bytes->length) {
-		byte_length = (u64)bytes->length;
-	}
-
-#ifdef IRON_WINDOWS
-	MultiByteToWideChar(CP_UTF8, 0, path, -1, temp_wstring, 1024);
-	FILE *file = _wfopen(temp_wstring, L"wb");
-#else
-	FILE *file = fopen(path, "wb");
-#endif
-	if (file == NULL) {
-		return;
-	}
-	fwrite(bytes->buffer, 1, byte_length, file);
-	fclose(file);
-}
-
 typedef struct _callback_data {
 	int32_t size;
 	char    url[512];

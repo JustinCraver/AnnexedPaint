@@ -1,0 +1,139 @@
+#include "global.h"
+
+char *destination = "@PROJECT@";
+char *asset = "@ASSET@";
+char *mode = "@MODE@";
+char *expected_pixels = "@PIXELS@";
+int packed = @PACKED@;
+int failures = 0;
+int checks = 0;
+int frames = 0;
+char *recent_before;
+
+void check(int ok, char *name) {
+	checks++;
+	if (!ok) {
+		failures++;
+		printf("SAVE CHECK FAIL %s", name);
+	}
+}
+
+void finished() {
+	if (failures == 0) {
+		printf("SAVE WORKFLOW PASS %s checks=%d", mode, checks);
+	}
+	// End only after all save/state/content assertions. Automatic CLI shutdown
+	// runs on later frames and is a separate P1-02 behavior.
+	script_quit();
+}
+
+void verify_failure() {
+	check(string_equals(sys_title(), "pending* - ArmorPaint"), "failure retains dirty title");
+	check(string_equals(project_filepath_get(), destination), "failure retains current destination");
+	check(string_equals(recent_before, string_array_join(script_get_config()->recent_projects, "\n")), "failure retains recent files");
+	finished();
+}
+
+void verify_saved() {
+	check(iron_file_exists(destination), "saved file exists");
+	check(string_index_of(sys_title(), "* - ") < 0, "success clears dirty title");
+	check(string_equals(script_get_config()->recent_projects->buffer[0], destination), "success records recent file");
+	export_texture_run(string("%s/before", expected_pixels), false);
+	finished();
+}
+
+void save_roundtrip() {
+	script_timeline_set_frame(0);
+	slot_layer_t *layer = script_layer_get("saved_color");
+	check(layer != NULL, "color layer fixture exists");
+	project_filepath_set(destination);
+	sys_title_set("pending* - ArmorPaint");
+	project_save(false);
+	check(string_equals(sys_title(), "pending* - ArmorPaint"), "queued save retains dirty title");
+	script_notify_on_next_frame(verify_saved);
+}
+
+void verify_roundtrip() {
+	check(script_layer_count() == 2, "layer count round trip");
+	slot_layer_t *layer = script_layer_get("saved_color");
+	check(layer != NULL && layer->mask_opacity == 0.625, "layer metadata round trip");
+	slot_material_t *material = script_get_material("saved_material");
+	check(material != NULL, "named material round trip");
+	if (material != NULL) {
+		script_material_set(material);
+		ui_node_t *noise = script_material_get_node("TEX_NOISE");
+		check(noise != NULL, "material node round trip");
+		if (noise != NULL) {
+			ui_node_socket_t *scale = noise->inputs->buffer[1];
+			check(scale->default_value->buffer[0] == 8.0, "material node scale round trip");
+		}
+	}
+	gpu_texture_t *image = script_get_texture("asset.svg");
+	check(image != NULL && image->width == 4 && image->height == 4, "asset texture round trip");
+	check(script_get_project()->assets->length == 1, "asset count round trip");
+	if (packed) {
+		check(script_packed_asset_save("asset.svg", string("%s/packed.bytes", expected_pixels)), "packed bytes retained");
+	}
+	object_t *object = script_get_object("saved_mesh");
+	check(object != NULL && object->transform->loc.x == 2.5, "timeline keyframe transform round trip");
+	check(script_timeline_get_frame() == 7, "timeline selected frame");
+	export_texture_run(string("%s/after", expected_pixels), false);
+	finished();
+}
+
+void select_keyframe() {
+	script_timeline_set_frame(7);
+	script_notify_on_next_frame(verify_roundtrip);
+}
+
+void quit_watchdog() {
+	frames++;
+	if (frames < 5) {
+		script_notify_on_next_frame(quit_watchdog);
+	}
+	else {
+		check(0, "successful save-and-quit did not quit");
+		script_quit();
+	}
+}
+
+void main() {
+	if (string_equals(mode, "failure")) {
+		project_filepath_set(destination);
+		sys_title_set("pending* - ArmorPaint");
+		recent_before = string_array_join(script_get_config()->recent_projects, "\n");
+		project_save(true);
+		check(string_equals(sys_title(), "pending* - ArmorPaint"), "queued failure retains title");
+		script_notify_on_next_frame(verify_failure);
+	}
+	else if (string_equals(mode, "quit")) {
+		project_filepath_set(destination);
+		sys_title_set("pending* - ArmorPaint");
+		printf("SAVE QUIT REQUEST");
+		project_save(true);
+		script_notify_on_next_frame(quit_watchdog);
+	}
+	else if (string_equals(mode, "read")) {
+		script_project_open(destination);
+		script_notify_on_next_frame(select_keyframe);
+	}
+	else {
+		slot_layer_t *layer = script_layer_new_color(0xff336699, 1.0, 0.25, 0.0);
+		script_layer_set_name(layer, "saved_color");
+		layer->mask_opacity = 0.625;
+		slot_material_t *material = script_material_create("saved_material");
+		ui_node_t *noise = script_material_create_node("TEX_NOISE");
+		check(material != NULL && noise != NULL, "material node fixture exists");
+		script_material_set_float(noise, true, 1, 8.0);
+		script_import_asset(asset, false);
+		script_set_pack_assets(packed);
+		object_t *object = context_main_object()->base;
+		// The native object owns its name beyond this script callback.
+		object->name = string_copy("saved_mesh");
+		script_timeline_add_keyframe("saved_mesh", 0);
+		object->transform->loc.x = 2.5;
+		transform_build_matrix(object->transform);
+		script_timeline_add_keyframe("saved_mesh", 7);
+		script_notify_on_next_frame(save_roundtrip);
+	}
+}

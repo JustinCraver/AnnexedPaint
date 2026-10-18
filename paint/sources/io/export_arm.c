@@ -55,6 +55,14 @@ void export_arm_export_node(ui_node_t *n, asset_t_array_t *assets) {
 	}
 }
 
+static char *export_arm_relative_path(char *project_path, char *asset_path) {
+#ifdef IRON_WINDOWS
+	project_path = string_replace_all_tmp(project_path, "/", "\\");
+	asset_path   = string_replace_all_tmp(asset_path, "/", "\\");
+#endif
+	return path_to_relative(project_path, asset_path);
+}
+
 string_array_t *export_arm_assets_to_files(char *project_path, asset_t_array_t *assets) {
 	string_array_t *texture_files = any_array_create_from_raw((void *[]){}, 0);
 	for (i32 i = 0; i < assets->length; ++i) {
@@ -66,7 +74,7 @@ string_array_t *export_arm_assets_to_files(char *project_path, asset_t_array_t *
 #endif
 		// Convert image path from absolute to relative
 		if (same_drive) {
-			any_array_push(texture_files, path_to_relative(project_path, a->file));
+			any_array_push(texture_files, export_arm_relative_path(project_path, a->file));
 		}
 		else {
 			any_array_push(texture_files, a->file);
@@ -86,7 +94,7 @@ string_array_t *export_arm_meshes_to_files(char *project_path) {
 #endif
 		// Convert mesh path from absolute to relative
 		if (same_drive) {
-			any_array_push(mesh_files, path_to_relative(project_path, file));
+			any_array_push(mesh_files, export_arm_relative_path(project_path, file));
 		}
 		else {
 			any_array_push(mesh_files, file);
@@ -106,7 +114,7 @@ string_array_t *export_arm_fonts_to_files(char *project_path, slot_font_t_array_
 #endif
 		// Convert font path from absolute to relative
 		if (same_drive) {
-			any_array_push(font_files, path_to_relative(project_path, f->file));
+			any_array_push(font_files, export_arm_relative_path(project_path, f->file));
 		}
 		else {
 			any_array_push(font_files, f->file);
@@ -126,7 +134,7 @@ string_array_t *export_arm_sounds_to_files(char *project_path, slot_sound_t_arra
 #endif
 		// Convert sound path from absolute to relative
 		if (same_drive) {
-			any_array_push(sound_files, path_to_relative(project_path, f->file));
+			any_array_push(sound_files, export_arm_relative_path(project_path, f->file));
 		}
 		else {
 			any_array_push(sound_files, f->file);
@@ -224,7 +232,7 @@ buffer_t *export_arm_encode_project(char *path) {
 		any_array_push(md, source >= 0 && source < i ? export_arm_linked_mesh_data(p, source) : export_arm_named_mesh_data(p));
 	}
 
-	char           *relative_to   = string_equals(g_project->_->filepath, "") ? path : g_project->_->filepath;
+	char           *relative_to   = path;
 	string_array_t *texture_files = export_arm_assets_to_files(relative_to, g_project->_->assets);
 	string_array_t *font_files    = export_arm_fonts_to_files(relative_to, g_project->_->fonts);
 	string_array_t *sound_files   = export_arm_sounds_to_files(relative_to, g_project->_->sounds);
@@ -409,11 +417,31 @@ buffer_t *export_arm_encode_project(char *path) {
 	return buffer;
 }
 
-void export_arm_run_project(char *path) {
+bool export_arm_run_project(char *path) {
 	buffer_t *buffer = export_arm_encode_project(path);
-	iron_file_save_bytes(path, buffer, buffer->length + 1);
+	if (buffer == NULL) {
+		console_error(string("%s: %s", tr("Could not save project"), path));
+		return false;
+	}
+#ifdef IRON_WASM
+	// Preserve browser/cloud routing; fclose there only acknowledges dispatch.
+	bool saved = iron_file_save_bytes(path, buffer, buffer->length);
+#else
+	bool saved = iron_file_save_bytes_atomic(path, buffer, buffer->length);
+#endif
 	array_free(buffer);
 	free(buffer);
+	if (!saved) {
+		console_error(string("%s: %s", tr("Could not save project"), path));
+		return false;
+	}
+
+#ifdef IRON_WASM
+	if (box_projects_is_cloud_path(path) || starts_with(path, "/files/")) {
+		console_info(tr("Project save requested; browser completion is unconfirmed"));
+		return false;
+	}
+#endif
 
 #if defined(IRON_ANDROID) || defined(IRON_IOS) || defined(IRON_WASM)
 #ifdef IRON_WASM
@@ -439,26 +467,7 @@ void export_arm_run_project(char *path) {
 	}
 #endif
 
-	if (!string_equals(path, g_project->_->filepath)) {
-		return;
-	}
-
-	// Save to recent
-#ifdef IRON_IOS
-	char *recent_path = substring(path, string_last_index_of(path, "/") + 1, string_length(path));
-#else
-	char *recent_path = path;
-#endif
-
-#ifdef IRON_WINDOWS
-	recent_path = string_copy(string_replace_all(recent_path, "\\", "/"));
-#endif
-	string_array_t *recent = g_config->recent_projects;
-	string_array_remove(recent, recent_path);
-	array_insert(recent, 0, recent_path);
-	config_save();
-
-	console_info(tr("Project saved"));
+	return true;
 }
 
 packed_asset_t_array_t *export_arm_get_packed_assets(char *project_path, string_array_t *texture_files) {
