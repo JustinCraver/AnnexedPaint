@@ -38,8 +38,9 @@ void import_texture_run(char *path, bool hdr_as_envmap) {
 		}
 	}
 
-	char *ext                              = substring(path, string_last_index_of(path, ".") + 1, string_length(path));
+	char *ext                              = to_lower_case(path + string_last_index_of(path, ".") + 1);
 	gpu_texture_t *(*importer)(char *path) = any_map_get(import_texture_importers, ext);
+	free(ext);
 
 	bool           cached = any_map_get(data_cached_textures, path) != NULL; // Already loaded or pink texture for missing file
 	gpu_texture_t *image;
@@ -55,9 +56,12 @@ void import_texture_run(char *path, bool hdr_as_envmap) {
 	}
 
 	any_map_set(data_cached_textures, path, image);
-	string_array_t *ar    = string_split(path, PATH_SEP);
-	char           *name  = ar->buffer[ar->length - 1];
-	asset_t        *asset = ALLOC_INIT(asset_t, {.name = name, .file = path, .id = g_project->_->next_asset_id++});
+	i32 last_sep = string_last_index_of(path, PATH_SEP);
+#ifdef IRON_WINDOWS
+	last_sep = math_max(last_sep, string_last_index_of(path, "/"));
+#endif
+	char    *name  = substring(path, last_sep + 1, string_length(path));
+	asset_t *asset = ALLOC_INIT(asset_t, {.name = name, .file = path, .id = g_project->_->next_asset_id++});
 	any_array_push(g_project->_->assets, asset);
 	if (g_context->texture == NULL) {
 		g_context->texture = asset;

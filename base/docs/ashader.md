@@ -1,3 +1,8 @@
 ## ashader
 
-A [minikong](https://github.com/armory3d/armorpaint/tree/main/base/sources/kong) wrapper. Converts a `.shader` file into a graphics API specific format. This includes `.hlsl` (converted into a d3d bytecode), `.msl` (metal shading language) for Metal or `.spirv` for Vulkan.
+A wrapper around the bundled [Kong compiler](../sources/kong/). It converts
+`.shader` sources to graphics API formats: HLSL/Direct3D bytecode, Metal shader
+source, SPIR-V for Vulkan, and WGSL for WebGPU. The build path is implemented in
+[ashader.c](../tools/amake/ashader.c); [amake](amake.md) invokes it during asset
+generation. See `base/shaders/raytrace/src/` for the separate ray-tracing shaders
+and backend scripts.

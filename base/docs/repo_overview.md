@@ -1,27 +1,88 @@
-This repository contains everything needed to build armorpaint except the C compiler itself.
+# Architecture and workflow map
 
-## `/base`
+The checkout contains the ArmorPaint application and the Iron engine/build tools.
+It bundles many dependencies and build-tool binaries, but still requires platform
+compiler, SDK and system libraries; see the [development guide](readme.md).
+The application manifest is in `paint/sources/globals.h`: title `ArmorPaint`,
+version `1.1alpha`, project format `19`, config format `1` at the 2026-10-18 review.
 
-Contains a general-purpose 3D engine.
+Paths below are relative to the repository root.
 
-#### `/sources`
+## Source ownership
 
-A collection of C source files for the complete 3D engine, hardware abstraction, OS and graphics api specifics (`/backends`) and some helper libraries (`/libs`). Only a minimal single file / header libraries are used.
+| Area | Responsibility |
+| --- | --- |
+| `paint/project.c`, `base/project.c` | Application/engine sources, defines, platform features, shader and asset packaging |
+| `paint/sources/main.c` | Application initialization and inclusion of most application `.c` modules |
+| `paint/sources/{types,functions,globals,enums}.h` | Shared data structures, declarations, state and enums |
+| `paint/sources/startup.c` | Embedded startup scene data |
+| `paint/sources/base.c`, `context.c`, `config.c` | Frame/input integration, active editing state, preferences |
+| `paint/sources/ui/` | Immediate-mode editor UI, dialogs, panels, timeline |
+| `paint/sources/slots/`, `history.c`, `util/util_layer.c` | Layer/material/brush resources, layer operations and undo/redo |
+| `paint/sources/render/`, `parser_material.c`, `node_shader.c` | Painting, render paths, shader generation and material compilation |
+| `paint/sources/nodes_*` | Brush, material, mesh and neural node implementations |
+| `paint/sources/io/`, `project.c`, `util/util_encode.c` | Import/export, project lifecycle and `.arm` encoding |
+| `paint/plugins/` | Native format readers (including FBX, glTF, SVG, TIFF and EXR) |
+| `paint/sources/minic_{api,impl}.c`, `minic_api_list.h`, `agent.c`, `args.c` | Script API, editor automation, CLI and local MCP bridge |
+| `paint/assets/`, `paint/shaders/` | Shipped presets, locale text, scripts, meshes and application shaders |
+| `base/sources/engine.c`, `iron_*.c`, `backends/` | Scene/assets, memory utilities, UI/input/files, GPU and platform backends |
+| `base/sources/libs/`, `kong/` | Bundled libraries, minic interpreter and shader compiler |
+| `base/tools/amake/`, `base/tools/bin/` | Build-tool source and checked-in platform binaries |
+| `base/tools/tcc/`, `iris/`, `pad/` | Optional compiler/tool sources; not the normal Windows app toolchain |
 
-#### `/tests`
+`paint/project.c` directly compiles `main.c`, `minic_api.c`, and `startup.c` plus
+the engine and native plug-ins. Most application modules are included by `main.c`;
+adding them separately to the project would duplicate definitions. State is shared
+through `g_project`, `g_context`, `g_config` and related globals. This is an
+established design, not a recommendation to split it into new abstraction layers.
 
-Small stand-alone projects for testing.
+## Main workflows
 
-#### `/tools`
+1. **Startup and new project:** `main.c` initializes shared state, config and
+   graphics; `base.c` initializes the editor. `ui/box_new_project.c` selects a
+   template and `project.c:project_new()` resets objects, materials, layers,
+   history, timeline and view state. Several preview/layer operations run on a
+   later frame through `sys_notify_on_next_frame`.
+2. **Import:** file dialogs and drops reach `io/import_asset.c`; scripts reach the
+   same path through `minic_impl.c:script_import_asset()`. Mesh import dispatches
+   OBJ/Blender internally and native plug-in formats through a registry.
+   `import_mesh_finish_import()` completes hierarchy, bounds and layer setup.
+   Texture import caches GPU images and registers project assets. Recognition and
+   registry lookup must agree on extension case; retain the caller's actual path.
+3. **Paint and undo:** tools/UI update context; brush/material nodes feed generated
+   shaders in `render/make_paint.c` and related files. `render_path_paint.c` writes
+   GPU layer targets; `slots/slot_layer.c` and `util/util_layer.c` manage layer
+   resources. `history.c` records operation-specific state and texture snapshots.
+   A change may affect both ordinary painting and fill/mask layers.
+4. **Save and reopen:** `project_save()` defers to `export_arm_run_project()`.
+   `export_arm_encode_project()` collects nodes, assets, layer pixels and timeline
+   data; `util_encode.c`/armpack serialize it. `import_arm.c` and `import_legacy.c`
+   reconstruct state and compatibility data. Save currently lacks propagated
+   filesystem success; see review P1-01. Packed/external assets and legacy files
+   require separate compatibility checks.
+5. **Export:** `ui/box_export.c` and `args.c` select settings;
+   `io/export_texture.c` flattens selected layers and applies channel/color-space
+   mappings from `paint/assets/export_presets/`. PNG/JPG and EXR bit depths take
+   different write paths. Mesh, material and player export have separate owners.
+6. **Timeline/capture:** `ui/tab_timeline.c` owns keyframes, playback, stages and
+   save integration. `viewport.c` captures the viewport; `base/sources/iron_image.c`
+   implements MP4 encoding. Current capture writes `output.mp4` next to the saved
+   project. Presence of these paths does not qualify timing or visual output.
+7. **Scripts and automation:** minic evaluates C-like scripts through explicit
+   registered API functions. The desktop `--mcp` stdio bridge communicates with a
+   running editor using files in its application-data `agent` directory. It is
+   not a stateless headless editor. Preserve imported script trust prompts and
+   session/restore behavior; concurrent-client handling is not qualified here.
 
-- `/amake`: armorpain build tool
-- `/bin`: amake binary for each supported platform
-- `/tcc`: actually a C compiler
+## Platform and feature boundaries
 
-#### `/project.c`
+Windows uses Direct3D12 by default; other backends include Vulkan, Metal and
+WebGPU. `paint/project.c` gates features by platform. Neural nodes, account/cloud
+operations and web player export involve external assets or services; a local
+build does not verify those dependencies. Player export explicitly rejects Debug
+builds, and its macOS branch reports `Not implemented`.
 
-This file adds C source files, include directories, libraries and defines to the project, depending on the selected platform, graphics api and build flags.
-
-## `/paint`
-
-Contains armorpaint specific code & assets only. The `project.c` file adds this specific code to the final project.
+The [review](PROJECT_REVIEW.md) separates observed behavior, source-confirmed
+limitations, untested areas and proposed improvements. No accepted Annexed-specific
+requirements or roadmap were found; preserve upstream intent until that direction
+is explicitly decided.

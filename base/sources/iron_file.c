@@ -164,7 +164,8 @@ bool iron_internal_file_reader_open(iron_file_reader_t *reader, const char *file
 
 #ifdef IRON_WINDOWS
 	// Drive letter or network
-	bool is_abs = (filename[1] == ':' && filename[2] == '\\') || (filename[0] == '\\' && filename[1] == '\\');
+	bool is_abs = (filename[0] != '\0' && filename[1] == ':' && (filename[2] == '\\' || filename[2] == '/')) ||
+	              (filename[0] == '\\' && filename[1] == '\\');
 #else
 	bool is_abs = filename[0] == '/';
 #endif

@@ -36,8 +36,13 @@ void import_mesh_run(char *path, bool _clear_layers, bool replace_existing, bool
 		import_blend_mesh_run(path, replace_existing);
 	}
 	else {
-		char *ext                           = string_tmp("%s", path + string_last_index_of(path, ".") + 1);
+		char *ext                           = to_lower_case(path + string_last_index_of(path, ".") + 1);
 		raw_mesh_t *(*importer)(char *path) = any_map_get(import_mesh_importers, ext);
+		free(ext);
+		if (importer == NULL) {
+			console_error(strings_unknown_asset_format());
+			return;
+		}
 
 		raw_mesh_t *mesh = importer(path);
 		if (mesh == NULL) {

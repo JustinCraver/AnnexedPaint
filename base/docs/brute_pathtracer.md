@@ -1,10 +1,20 @@
-Brute Pathtracer is a custom built path-tracing engine used in armorcore which trades correctness for speed. It is powered by hardware accelerated ray-tracing and runs on Direct3D12, Vulkan and Metal.
+Brute Pathtracer is the custom path-tracing engine in the shared Iron code. It
+trades correctness for speed and uses hardware-accelerated ray tracing through
+the Direct3D12, Vulkan and Metal backends.
 
 In ArmorPaint, it is used for rendering the path-traced viewport mode and for ray-traced baking features.
 
-By default, the path-tracer supports 64 unique objects and up to 1024 instances. It has two modes - fast, which has most of the features disabled, and quality, which has features like translucency and emission enabled.
+The backend declarations currently allocate 64 unique geometry entries and 1024
+instances (`GPU_RAYTRACE_MAX_OBJECTS` in the backend headers and the instance
+arrays in their implementations). These are implementation limits, not tested
+scene-size guarantees. It has two modes - fast, which has most of the features
+disabled, and quality, which has features like translucency and emission enabled.
 
-- https://github.com/armory3d/armorpaint/tree/main/base/shaders/raytrace/src
-- https://github.com/armory3d/armorpaint/blob/main/paint/sources/render/render_path_raytrace.c
-- https://github.com/armory3d/armorpaint/blob/main/paint/sources/render/render_path_raytrace_bake.c
-- https://github.com/armory3d/armorpaint/blob/main/base/sources/iron_gpu.h
+- [Ray-tracing shaders](../shaders/raytrace/src/)
+- [Viewport path](../../paint/sources/render/render_path_raytrace.c)
+- [Bake path](../../paint/sources/render/render_path_raytrace_bake.c)
+- [GPU interface](../sources/iron_gpu.h)
+- [Backend implementations](../sources/backends/)
+
+The Windows startup/import checks in the [project review](PROJECT_REVIEW.md) do
+not qualify ray-traced viewport quality or baking output.

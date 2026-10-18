@@ -410,7 +410,7 @@ void args_parse() {
 				printf("                                    Contents of the opened project are included\n");
 				printf("  --player                          Run in player mode\n");
 				printf("  --help                            Show this help message\n");
-				exit(1);
+				exit(0);
 			}
 			++i;
 		}
