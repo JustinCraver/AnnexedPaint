@@ -458,4 +458,5 @@ void _kickstart() {
 #endif
 
 	iron_start();
+	args_check_result();
 }

@@ -84,7 +84,7 @@ void project_import_mesh_box_draw() {
 		console_toast(tr("Importing mesh"));
 #endif
 
-		import_mesh_run(path, clear_layers, replace_existing, keep_camera);
+		if (!import_mesh_run(path, clear_layers, replace_existing, keep_camera)) return;
 		if (done != NULL) {
 			done();
 		}

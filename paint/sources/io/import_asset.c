@@ -33,7 +33,8 @@ void import_asset_run(char *path, f32 drop_x, f32 drop_y, bool show_box, bool hd
 	}
 
 	if (path_is_mesh(path)) {
-		show_box ? project_import_mesh_box(path, true, true, false, NULL) : import_mesh_run(path, true, true, false);
+		if (show_box) project_import_mesh_box(path, true, true, false, NULL);
+		else if (!import_mesh_run(path, true, true, false)) return;
 		if (drop_x > 0) {
 			ui_box_click_to_hide = false; // Prevent closing when going back to window after drag and drop
 		}
@@ -71,7 +72,7 @@ void import_asset_run(char *path, f32 drop_x, f32 drop_y, bool show_box, bool hd
 		box_preferences_lut_picked(path);
 	}
 	else if (path_is_project(path)) {
-		import_arm_run_project(path);
+		if (!import_arm_run_project(path)) return;
 	}
 	else if (path_is_plugin(path)) {
 		import_plugin_run(path);

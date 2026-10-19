@@ -53,6 +53,26 @@ Keep the matching `data/` next to a non-embedded executable. Development setting
 are normally written to `data/config.json`; protected installations use the
 application data directory. Use disposable copies for destructive workflow tests.
 
+For batch texture export, supply an existing output directory and an exact preset
+name from `data/export_presets/`, without `.json`. Spaces and dots in directory
+names are supported. Types are `png`, `jpg`, `exr16` and `exr32`:
+
+```powershell
+.\ArmorPaint.exe --background --export-textures png base_color 'C:\Textures\output.v1'
+.\ArmorPaint.exe --background --script 'prepare.c' --export-textures exr16 generic 'C:\Textures\output.v1'
+```
+
+When combined, the script runs on the opened project first. The CLI waits for its
+finite next-frame/update callbacks, then applies the requested export settings and
+completes the writes before background exit. Invalid arguments/type/preset/directory,
+script load/compile/runtime errors, a nonzero script `main` result, and texture
+write failures return **1**; successful completion returns **0**. Explicitly quitting
+a script before its requested CLI texture export also fails. Use one export flag;
+`--api` cannot be combined with scripts or export. Rejected project and plug-in
+mesh imports also return **1** and stop the script/export sequence (review P1-03).
+A failed multichannel export can leave channels
+already written; it reports failure rather than claiming a complete export.
+
 ### Troubleshooting
 
 - `MSB8020` for `ClangCL`: having `clang-cl.exe` alone does not provide the MSBuild
@@ -74,6 +94,10 @@ application data directory. Use disposable copies for destructive workflow tests
 .\paint\tests\smoke-windows.ps1
 .\paint\tests\save-windows.ps1
 .\paint\tests\save-windows.ps1 -SkipNative  # writer/lifecycle checks without a GPU
+.\paint\tests\export-windows.ps1
+.\paint\tests\export-windows.ps1 -SkipNative  # image writer and encoder checks
+.\paint\tests\import-windows.ps1
+.\paint\tests\import-windows.ps1 -SkipNative  # decoder, mesh stream and glTF checks without a GPU
 git diff --check
 ```
 
@@ -105,6 +129,50 @@ is insufficient. Per-check logs, hashes and `results.json` stay under
 `paint/build/tests/save-<id>/`. Native file-picker interaction, physical full-disk
 and power-loss behavior, other platforms and browser/cloud completion are not
 qualified by these checks.
+
+The export suite checks the production PNG/JPEG writer with injected short-write,
+flush and close failures. Guarded allocations detect encoder overruns for small
+and incompressible PNG/JPEG images; decoded output checks dimensions and color.
+`-SkipNative` runs these without a GPU. The full suite checks direct and script-then-export commands, exact presets,
+decoded 2048x2048 PNG/JPEG/half-float EXR/float EXR channel values, invalid arguments,
+missing/failed scripts, deferred runtime errors and real locked texture writes.
+It checks that partial multichannel failure returns nonzero and suppresses success.
+Twelve packed-save processes exercise automatic shutdown by default; change that
+count with `-ShutdownRepeats`. The save suite also uses automatic CLI completion
+after its assertions. Every native process retains the original 30-second limit;
+there are no crash retries. Results, logs and hashes stay under
+`paint/build/tests/export-<id>/`. These checks do not qualify interactive painting,
+other platforms, audio playback, browser/cloud completion or every texture preset.
+
+The import suite tests the production project staging decoder with every
+truncated prefix against an unreadable guard page, every staging allocation
+failure, wrong field types/counts, invalid mesh/material/parent references,
+overflowing dimensions and corrupt LZ4 data. It checks generated format-version
+0-19 fixtures (including the old `fill_layer` reference), two bundled mesh scenes,
+and complete mesh-stream rejection when a later record is null or invalid.
+The stream harness supplies controlled importer/scene callbacks; its staging
+owner and the canvas encoder are extracted unchanged from production source,
+with source/hash receipts. `-SkipNative` also checks missing/truncated glTF buffers,
+invalid accessors/nodes/cycles and explicit rejection of multiple primitives.
+
+The full import suite uses a populated disposable native project and checks
+geometry/layer/material identity, asset references, timeline, dirty title,
+filepath and recent files after rejected imports. A saved three-object project
+reopens with its geometry and material mapping; generated versions 4, 9, 18 and
+19 also reopen. These are generated compatibility fixtures, not an archive of
+historical project files. Invalid CLI project/glTF imports must exit **1** before
+exporting anything. Receipts stay under `paint/build/tests/import-<id>/`, with
+the same 30-second native limits and no crash retries.
+
+Project decoding validates fields by name before resetting the active project;
+the wire encoding, legacy defaults and imported-script trust gates are retained.
+glTF geometry import currently accepts one triangle primitive per mesh node.
+Multiple primitives are rejected as a whole file, preserving active work;
+material splitting/merging and glTF material-definition import are not added.
+Sparse accessors and non-triangle primitives are also explicitly unsupported.
+The checks do not qualify all malformed inputs/codecs, every historical project,
+OBJ/Blender/FBX parser internals, interactive dialogs/painting, other platforms,
+or resource exhaustion and GPU allocation failures during reconstruction.
 
 Other existing checks have narrower or different purposes:
 

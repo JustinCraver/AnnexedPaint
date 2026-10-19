@@ -1,5 +1,5 @@
 
-#include "../global.h"
+#include "../functions.h"
 
 i32 util_encode_mesh_data_size(mesh_data_t_array_t *datas) {
 	if (datas == NULL) {

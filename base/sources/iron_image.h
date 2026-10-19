@@ -3,8 +3,8 @@
 #include "iron_array.h"
 #include "iron_global.h"
 
-void      iron_write_jpg(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, i32 quality);
-void      iron_write_png(char *path, buffer_t *bytes, i32 w, i32 h, i32 format);
+bool      iron_write_jpg(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, i32 quality);
+bool      iron_write_png(char *path, buffer_t *bytes, i32 w, i32 h, i32 format);
 buffer_t *iron_encode_jpg(buffer_t *bytes, i32 w, i32 h, i32 format, i32 quality);
 buffer_t *iron_encode_png(buffer_t *bytes, i32 w, i32 h, i32 format);
 

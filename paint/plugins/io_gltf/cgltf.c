@@ -4,12 +4,101 @@
 #include "engine.h"
 #include "iron_array.h"
 #include "iron_obj.h"
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 
 static bool  has_next     = false;
 static int   current_node = 0;
 static float scale_pos    = 1.0;
+
+static bool io_gltf_validate(cgltf_data *data) {
+	for (cgltf_size i = 0; i < data->buffer_views_count; ++i) {
+		cgltf_buffer_view *v = &data->buffer_views[i];
+		if (v->buffer == NULL || v->buffer->data == NULL || v->offset > v->buffer->size || v->size > v->buffer->size - v->offset)
+			return false;
+	}
+	for (cgltf_size i = 0; i < data->accessors_count; ++i) {
+		cgltf_accessor *a    = &data->accessors[i];
+		cgltf_size      size = cgltf_calc_size(a->type, a->component_type);
+		if (a->is_sparse || a->buffer_view == NULL || a->count == 0 || a->count > INT_MAX / 16 || size == 0 || a->stride < size ||
+		    a->offset > a->buffer_view->size || size > a->buffer_view->size - a->offset || a->count - 1 > (a->buffer_view->size - a->offset - size) / a->stride)
+			return false;
+	}
+	for (cgltf_size i = 0; i < data->nodes_count; ++i) {
+		cgltf_node *n      = &data->nodes[i];
+		cgltf_node *parent = n->parent;
+		for (cgltf_size steps = 0; parent != NULL; ++steps) {
+			if (parent == n || steps >= data->nodes_count)
+				return false;
+			parent = parent->parent;
+		}
+		if (n->mesh == NULL)
+			continue;
+		// The existing raw-mesh contract has no primitive/material mapping. Reject
+		// the whole file rather than silently importing only its last primitive.
+		if (n->mesh->primitives_count != 1) {
+			iron_log("glTF: multiple primitives are not supported; split by material before import");
+			return false;
+		}
+		cgltf_primitive *p = &n->mesh->primitives[0];
+		if (p->type != cgltf_primitive_type_triangles)
+			return false;
+		cgltf_accessor *pos = NULL;
+		for (cgltf_size j = 0; j < p->attributes_count; ++j) {
+			cgltf_attribute *a = &p->attributes[j];
+			if (a->data == NULL)
+				return false;
+			if (a->type == cgltf_attribute_type_position)
+				pos = a->data;
+		}
+		if (pos == NULL || pos->type != cgltf_type_vec3)
+			return false;
+		float m[16];
+		cgltf_node_transform_world(n, m);
+		for (int j = 0; j < 16; ++j)
+			if (!isfinite(m[j]))
+				return false;
+		for (int j = 0; j < 3; ++j)
+			if (!isfinite(n->scale[j]) || n->has_scale && n->scale[j] == 0)
+				return false;
+		for (cgltf_size j = 0; j < p->attributes_count; ++j) {
+			cgltf_attribute *a   = &p->attributes[j];
+			bool             tex = a->type == cgltf_attribute_type_texcoord;
+			if (a->data->count != pos->count ||
+			    (tex ? a->data->type != cgltf_type_vec2
+			         : (a->type == cgltf_attribute_type_position || a->type == cgltf_attribute_type_normal) && a->data->type != cgltf_type_vec3))
+				return false;
+			if (a->type != cgltf_attribute_type_position && a->type != cgltf_attribute_type_normal && !tex)
+				continue;
+			for (cgltf_size k = 0; k < a->data->count; ++k) {
+				float v[3] = {0};
+				if (!cgltf_accessor_read_float(a->data, k, v, tex ? 2 : 3))
+					return false;
+				for (int c = 0; c < (tex ? 2 : 3); ++c)
+					if (!isfinite(v[c]))
+						return false;
+				if (a->type == cgltf_attribute_type_position)
+					for (int c = 0; c < 3; ++c)
+						if (!isfinite(m[c] * v[0] - m[4 + c] * v[2] + m[8 + c] * v[1] + m[12 + c]))
+							return false;
+			}
+		}
+		cgltf_size count = p->indices == NULL ? pos->count : p->indices->count;
+		if (count == 0 || count % 3 != 0 || count > INT_MAX / 4)
+			return false;
+		if (p->indices != NULL) {
+			if (p->indices->type != cgltf_type_scalar ||
+			    (p->indices->component_type != cgltf_component_type_r_8u && p->indices->component_type != cgltf_component_type_r_16u &&
+			     p->indices->component_type != cgltf_component_type_r_32u))
+				return false;
+			for (cgltf_size j = 0; j < count; ++j)
+				if (cgltf_accessor_read_index(p->indices, j) >= pos->count)
+					return false;
+		}
+	}
+	return cgltf_validate(data) == cgltf_result_success;
+}
 
 static cgltf_size io_gltf_index_count(cgltf_primitive *prim) {
 	if (prim->indices != NULL) {
@@ -33,7 +122,6 @@ void io_gltf_parse_mesh(raw_mesh_t *raw, cgltf_mesh *mesh, float *to_world, floa
 	cgltf_size       index_total = 0;
 
 	for (int i = 0; i < mesh->primitives_count; ++i) {
-		// TODO: handle all primitives
 		prim        = &mesh->primitives[i];
 		index_total = io_gltf_index_count(prim);
 		inda        = malloc(sizeof(uint32_t) * index_total);
@@ -68,7 +156,7 @@ void io_gltf_parse_mesh(raw_mesh_t *raw, cgltf_mesh *mesh, float *to_world, floa
 				cgltf_accessor_read_float(attrib->data, i, nora32 + i * 3, 3);
 			}
 		}
-		else if (attrib->type == cgltf_attribute_type_texcoord) {
+		else if (attrib->type == cgltf_attribute_type_texcoord && attrib->index == 0) {
 			texa32 = malloc(sizeof(float) * attrib->data->count * 2);
 			for (cgltf_size i = 0; i < attrib->data->count; ++i) {
 				cgltf_accessor_read_float(attrib->data, i, texa32 + i * 2, 2);
@@ -226,6 +314,9 @@ void io_gltf_parse_mesh(raw_mesh_t *raw, cgltf_mesh *mesh, float *to_world, floa
 
 	raw->scale_pos = scale_pos;
 	raw->scale_tex = 1.0;
+	free(posa32);
+	free(nora32);
+	free(texa32);
 }
 
 void *io_gltf_parse(char *buf, size_t size, const char *path) {
@@ -233,9 +324,17 @@ void *io_gltf_parse(char *buf, size_t size, const char *path) {
 	cgltf_data   *data    = NULL;
 	cgltf_result  result  = cgltf_parse(&options, buf, size, &data);
 	if (result != cgltf_result_success) {
+		current_node = 0;
+		scale_pos = 1.0;
 		return NULL;
 	}
-	cgltf_load_buffers(&options, data, path);
+	if (cgltf_load_buffers(&options, data, path) != cgltf_result_success || !io_gltf_validate(data) || current_node >= data->nodes_count) {
+		iron_log("glTF: invalid geometry or missing/truncated buffer");
+		cgltf_free(data);
+		current_node = 0;
+		scale_pos = 1.0;
+		return NULL;
+	}
 
 	raw_mesh_t *raw = (raw_mesh_t *)calloc(sizeof(raw_mesh_t), 1);
 
@@ -272,6 +371,7 @@ void *io_gltf_parse(char *buf, size_t size, const char *path) {
 
 	if (!has_next) {
 		current_node = 0;
+		scale_pos = 1.0;
 	}
 
 	raw->has_next = has_next;
@@ -288,7 +388,10 @@ buffer_t *io_gltf_skin_blob(char *buf, size_t size, const char *path) {
 	cgltf_data   *data    = NULL;
 	if (cgltf_parse(&options, buf, size, &data) != cgltf_result_success)
 		return NULL;
-	cgltf_load_buffers(&options, data, path);
+	if (cgltf_load_buffers(&options, data, path) != cgltf_result_success || !io_gltf_validate(data)) {
+		cgltf_free(data);
+		return NULL;
+	}
 
 	cgltf_node *mesh_node = NULL;
 	for (cgltf_size i = 0; i < data->nodes_count; i++) {

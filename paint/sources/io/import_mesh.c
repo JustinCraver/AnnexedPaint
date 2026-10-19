@@ -10,19 +10,52 @@ bool import_mesh_append        = false;
 
 static mesh_object_t *import_mesh_appended = NULL;
 
-void import_mesh_run(char *path, bool _clear_layers, bool replace_existing, bool keep_camera) {
-	if (!path_is_mesh(path)) {
-		if (!context_enable_import_plugin(path)) {
-			console_error(strings_unknown_asset_format());
-			return;
-		}
-	}
+static bool import_mesh_valid(raw_mesh_t *mesh) {
+	if (mesh == NULL || mesh->posa == NULL || mesh->nora == NULL || mesh->inda == NULL || mesh->posa->buffer == NULL || mesh->nora->buffer == NULL ||
+	    mesh->inda->buffer == NULL || mesh->posa->length == 0 || mesh->posa->length % 4 != 0 || mesh->inda->length == 0 || mesh->inda->length % 3 != 0 ||
+	    !isfinite(mesh->scale_pos) || !isfinite(mesh->scale_tex))
+		return false;
+	u32 vertices = mesh->posa->length / 4;
+	if (mesh->nora->length != vertices * 2 || mesh->texa != NULL && (mesh->texa->buffer == NULL || mesh->texa->length != vertices * 2) ||
+	    mesh->texa1 != NULL && (mesh->texa1->buffer == NULL || mesh->texa1->length != vertices * 2) ||
+	    mesh->cola != NULL && (mesh->cola->buffer == NULL || mesh->cola->length != vertices * 4))
+		return false;
+	for (u32 i = 0; i < mesh->inda->length; ++i)
+		if (mesh->inda->buffer[i] >= vertices)
+			return false;
+	return true;
+}
 
-	import_mesh_clear_layers = _clear_layers;
+static void import_mesh_discard(raw_mesh_t *mesh) {
+	if (mesh == NULL)
+		return;
+	// Importers transfer their arrays to the scene on success. A rejected stream
+	// must release those arrays before any scene owns them.
+	any_array_t *arrays[] = {(any_array_t *)mesh->posa,  (any_array_t *)mesh->nora, (any_array_t *)mesh->texa,
+	                         (any_array_t *)mesh->texa1, (any_array_t *)mesh->cola, (any_array_t *)mesh->inda};
+	for (i32 i = 0; i < 6; ++i)
+		if (arrays[i] != NULL) {
+			array_free(arrays[i]);
+			free(arrays[i]);
+		}
+	free(mesh);
+}
+
+static void import_mesh_prepare(bool clear_layers, bool replace_existing, bool keep_camera) {
+	import_mesh_clear_layers = clear_layers;
 	import_mesh_no_reset     = keep_camera;
 	import_mesh_append       = !replace_existing;
 	import_mesh_appended     = NULL;
 	g_context->layer_filter  = 0;
+}
+
+bool import_mesh_run(char *path, bool _clear_layers, bool replace_existing, bool keep_camera) {
+	if (!path_is_mesh(path)) {
+		if (!context_enable_import_plugin(path)) {
+			console_error(strings_unknown_asset_format());
+			return false;
+		}
+	}
 
 	char *p        = to_lower_case(path);
 	bool  is_obj   = ends_with(p, ".obj");
@@ -30,9 +63,11 @@ void import_mesh_run(char *path, bool _clear_layers, bool replace_existing, bool
 	free(p);
 
 	if (is_obj) {
+		import_mesh_prepare(_clear_layers, replace_existing, keep_camera);
 		import_obj_run(path, replace_existing);
 	}
 	else if (is_blend) {
+		import_mesh_prepare(_clear_layers, replace_existing, keep_camera);
 		import_blend_mesh_run(path, replace_existing);
 	}
 	else {
@@ -41,29 +76,41 @@ void import_mesh_run(char *path, bool _clear_layers, bool replace_existing, bool
 		free(ext);
 		if (importer == NULL) {
 			console_error(strings_unknown_asset_format());
-			return;
+			return false;
 		}
 
-		raw_mesh_t *mesh = importer(path);
-		if (mesh == NULL) {
-			console_error(string("Failed to import '%s'", path));
-			return;
-		}
-		if (string_equals(mesh->name, "")) {
-			mesh->name = string_copy(path_base_name(path));
-		}
-
-		replace_existing ? import_mesh_make_mesh(mesh) : import_mesh_add_mesh(mesh);
-
-		bool has_next = mesh->has_next;
-		while (has_next) {
-			raw_mesh_t *mesh = importer(path);
-			if (string_equals(mesh->name, "")) {
-				mesh->name = string_copy(path_base_name(path));
+		raw_mesh_t_array_t *meshes = any_array_create(0);
+		bool                has_next;
+		do {
+			raw_mesh_t *mesh      = importer(path);
+			bool        duplicate = array_index_of(meshes, mesh) >= 0;
+			if (!import_mesh_valid(mesh) || duplicate || meshes->length >= 65536) {
+				if (!duplicate)
+					import_mesh_discard(mesh);
+				for (u32 i = 0; i < meshes->length; ++i)
+					import_mesh_discard(meshes->buffer[i]);
+				array_free(meshes);
+				free(meshes);
+				console_error(string("Invalid or incomplete mesh data in '%s'", path));
+				return false;
 			}
 			has_next = mesh->has_next;
-			import_mesh_add_mesh(mesh);
+			any_array_push(meshes, mesh);
+		} while (has_next);
+
+		import_mesh_prepare(_clear_layers, replace_existing, keep_camera);
+		for (u32 i = 0; i < meshes->length; ++i) {
+			raw_mesh_t *mesh = meshes->buffer[i];
+			if (mesh->name == NULL || string_equals(mesh->name, ""))
+				mesh->name = string_copy(path_base_name(path));
+			if (i == 0 && replace_existing)
+				import_mesh_make_mesh(mesh);
+			else
+				import_mesh_add_mesh(mesh);
+			free(mesh); // Geometry/name/blob have transferred to the mesh data.
 		}
+		array_free(meshes);
+		free(meshes);
 	}
 
 	g_project->mesh_assets = any_array_create_from_raw(
@@ -75,6 +122,7 @@ void import_mesh_run(char *path, bool _clear_layers, bool replace_existing, bool
 #if defined(IRON_ANDROID) || defined(IRON_IOS)
 	sys_title_set(substring(path, string_last_index_of(path, PATH_SEP) + 1, string_last_index_of(path, ".")));
 #endif
+	return true;
 }
 
 static mesh_object_t *import_mesh_make_root() {

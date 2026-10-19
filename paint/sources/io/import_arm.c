@@ -1,5 +1,6 @@
 
 #include "../global.h"
+#include "import_arm_validate.c"
 
 scene_t   *scene_raw_gc;
 static f64 import_arm_progress_last     = 0.0;
@@ -81,17 +82,6 @@ void import_arm_run_mesh(project_t *raw) {
 	}
 	sys_notify_on_next_frame(&import_arm_run_mesh_on_next_frame, NULL);
 	history_reset();
-}
-
-project_t *import_arm_decode_project(buffer_t *b) {
-	if (!import_arm_has_version(b)) { // Mesh only
-		scene_t *scene = armpack_decode(b);
-		return ALLOC_INIT(project_t, {.mesh_datas = scene->mesh_datas});
-	}
-	if (import_arm_is_old(b)) {
-		return import_arm_from_old(b);
-	}
-	return armpack_decode(b);
 }
 
 static bool import_arm_is_selected(i32_array_t *selected, i32 i) {
@@ -243,6 +233,11 @@ static void import_arm_run_mesh_append_from_project(project_t *project, i32_arra
 void import_arm_run_mesh_append(char *path) {
 	buffer_t  *b       = data_get_blob(path);
 	project_t *project = import_arm_decode_project(b);
+	if (project == NULL) {
+		console_error(string("Invalid or unsupported project data in '%s'", path));
+		data_delete_blob(path);
+		return;
+	}
 	import_arm_run_mesh_append_from_project(project, NULL, NULL);
 	data_delete_blob(path);
 }
@@ -709,7 +704,7 @@ static void import_arm_sculpt_init(void *_) {
 	sys_remove_update(import_arm_sculpt_init);
 }
 
-void import_arm_run_project(char *path) {
+bool import_arm_run_project(char *path) {
 	bool keep_script_trust       = import_arm_keep_script_trust;
 	bool was_trusted             = project_scripts_trusted;
 	import_arm_keep_script_trust = false;
@@ -717,27 +712,15 @@ void import_arm_run_project(char *path) {
 	buffer_t *b = data_get_blob(path);
 	if (b == NULL) {
 		console_error(string("Could not open file %s.", path));
-		return;
+		return false;
 	}
-	project_t *project;
-	bool       import_as_mesh = false;
-#ifdef IRON_WINDOWS
-	bool is_cloud = string_index_of(path, "\\cloud\\") >= 0;
-#else
-	bool is_cloud = string_index_of(path, "/cloud/") >= 0;
-#endif
-
-	if (!import_arm_has_version(b)) {
-		import_as_mesh = true;
-		scene_raw_gc   = armpack_decode(b);
-		project        = ALLOC_INIT(project_t, {.mesh_datas = scene_raw_gc->mesh_datas});
+	project_t *project = import_arm_decode_project(b);
+	if (project == NULL) {
+		console_error(string("Invalid or unsupported project data in '%s'", path));
+		data_delete_blob(path);
+		return false;
 	}
-	else if (import_arm_is_old(b) && !is_cloud) {
-		project = import_arm_from_old(b);
-	}
-	else {
-		project = armpack_decode(b);
-	}
+	bool import_as_mesh = project->version == NULL;
 
 	if (project->version != NULL && project->layer_datas == NULL) {
 		// Import as material
@@ -752,14 +735,14 @@ void import_arm_run_project(char *path) {
 		else if (project->swatches != NULL) {
 			import_arm_run_swatches_from_project(project, path, false);
 		}
-		return;
+		return true;
 	}
 
 	g_context->layers_preview_dirty = true;
 	g_context->layer_filter         = 0;
 	import_arm_progress(0.1);
 
-	i32 progress_assets = project->assets->length + (project->sound_assets != NULL ? project->sound_assets->length : 0);
+	i32 progress_assets = (project->assets != NULL ? project->assets->length : 0) + (project->sound_assets != NULL ? project->sound_assets->length : 0);
 	i32 progress_loaded = 0;
 	i32 progress_bytes  = 1;
 	if (project->packed_assets != NULL) {
@@ -782,7 +765,8 @@ void import_arm_run_project(char *path) {
 	// Import as mesh instead
 	if (import_as_mesh) {
 		import_arm_run_mesh(project);
-		return;
+		data_delete_blob(path);
+		return true;
 	}
 
 // Save to recent
@@ -1281,19 +1265,14 @@ void import_arm_run_project(char *path) {
 	ui_dock_redraw(TAB_AREA_SIDEBAR1);
 	g_context->ddirty                                 = 4;
 	data_delete_blob(path);
+	return true;
 }
 
 void import_arm_run_material(char *path) {
 	buffer_t  *b = data_get_blob(path);
-	project_t *project;
-	if (import_arm_is_old(b)) {
-		project = import_arm_from_old(b);
-	}
-	else {
-		project = armpack_decode(b);
-	}
-
-	if (project->version == NULL) {
+	project_t *project = import_arm_decode_project(b);
+	if (project == NULL || project->version == NULL) {
+		console_error(string("Invalid or unsupported project data in '%s'", path));
 		data_delete_blob(path);
 		return;
 	}
@@ -1302,8 +1281,9 @@ void import_arm_run_material(char *path) {
 
 void import_arm_run_brush(char *path) {
 	buffer_t  *b       = data_get_blob(path);
-	project_t *project = armpack_decode(b);
-	if (project->version == NULL) {
+	project_t *project = import_arm_decode_project(b);
+	if (project == NULL || project->version == NULL || project->brush_nodes == NULL) {
+		console_error(string("Invalid or unsupported brush data in '%s'", path));
 		data_delete_blob(path);
 		return;
 	}
@@ -1350,8 +1330,9 @@ void import_arm_run_brush_from_project(project_t *project, char *path) {
 
 void import_arm_run_swatches(char *path, bool replace_existing) {
 	buffer_t  *b       = data_get_blob(path);
-	project_t *project = armpack_decode(b);
-	if (project->version == NULL) {
+	project_t *project = import_arm_decode_project(b);
+	if (project == NULL || project->version == NULL) {
+		console_error(string("Invalid or unsupported swatch data in '%s'", path));
 		data_delete_blob(path);
 		return;
 	}
@@ -1359,6 +1340,5 @@ void import_arm_run_swatches(char *path, bool replace_existing) {
 }
 
 bool import_arm_has_version(buffer_t *b) {
-	bool has_version = b->buffer[10] == 118; // 'v';
-	return has_version;
+	return b != NULL && b->buffer != NULL && b->length >= 22 && memcmp(b->buffer + 10, "version", 7) == 0;
 }

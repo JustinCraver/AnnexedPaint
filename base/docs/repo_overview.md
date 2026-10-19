@@ -27,6 +27,7 @@ Paths below are relative to the repository root.
 | `paint/assets/`, `paint/shaders/` | Shipped presets, locale text, scripts, meshes and application shaders |
 | `base/sources/engine.c`, `iron_*.c`, `backends/` | Scene/assets, memory utilities, UI/input/files, GPU and platform backends |
 | `base/sources/iron_file_write.c` | Checked byte writes and native project replacement through a unique sibling file |
+| `base/sources/iron_image.c` | Checked image writes and dynamically sized encoded-image buffers |
 | `base/sources/libs/`, `kong/` | Bundled libraries, minic interpreter and shader compiler |
 | `base/tools/amake/`, `base/tools/bin/` | Build-tool source and checked-in platform binaries |
 | `base/tools/tcc/`, `iris/`, `pad/` | Optional compiler/tool sources; not the normal Windows app toolchain |
@@ -52,6 +53,15 @@ build input. Engine `iron_file_write.c` is compiled by the existing base wildcar
    `import_mesh_finish_import()` completes hierarchy, bounds and layer setup.
    Texture import caches GPU images and registers project assets. Recognition and
    registry lookup must agree on extension case; retain the caller's actual path.
+   `import_arm.c` includes `import_arm_validate.c`: incoming projects are decoded
+   by field name into staged allocations and checked before `project_new()` or
+   append/import callbacks can modify the active project. Required arrays, mesh
+   layouts/references, matrices, hierarchy and exact LZ4 layer sizes are checked;
+   rejected staging allocations are released. Legacy defaults remain explicit.
+   Registry mesh imports collect and validate the complete stream before scene
+   replacement/addition. glTF checks buffer loading and geometry first; multiple
+   primitives, sparse accessors and non-triangles are rejected. OBJ/Blender have
+   separate parser paths. Rejected project/plug-in mesh imports stop CLI exports.
 3. **Paint and undo:** tools/UI update context; brush/material nodes feed generated
    shaders in `render/make_paint.c` and related files. `render_path_paint.c` writes
    GPU layer targets; `slots/slot_layer.c` and `util/util_layer.c` manage layer
@@ -75,6 +85,11 @@ build input. Engine `iron_file_write.c` is compiled by the existing base wildcar
    `io/export_texture.c` flattens selected layers and applies channel/color-space
    mappings from `paint/assets/export_presets/`. PNG/JPG and EXR bit depths take
    different write paths. Mesh, material and player export have separate owners.
+   Texture export returns an aggregate boolean only after encoding and checked
+   writes finish; failures suppress the success message. The CLI validates its
+   exact preset/type/directory, waits for script frame callbacks when combined,
+   reapplies CLI settings, and stops background execution after export completion.
+   Engine process status carries CLI failures through the native entry point.
 6. **Timeline/capture:** `ui/tab_timeline.c` owns keyframes, playback, stages and
    save integration. `viewport.c` captures the viewport; `base/sources/iron_image.c`
    implements MP4 encoding. Current capture writes `output.mp4` next to the saved

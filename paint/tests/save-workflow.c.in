@@ -22,9 +22,7 @@ void finished() {
 	if (failures == 0) {
 		printf("SAVE WORKFLOW PASS %s checks=%d", mode, checks);
 	}
-	// End only after all save/state/content assertions. Automatic CLI shutdown
-	// runs on later frames and is a separate P1-02 behavior.
-	script_quit();
+	// Let the CLI detect callback completion and exercise automatic shutdown.
 }
 
 void verify_failure() {

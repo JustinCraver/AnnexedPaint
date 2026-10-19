@@ -11,7 +11,25 @@ unsigned char *iron_deflate_raw(unsigned char *data, int data_len, int *out_len,
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
-void _write_image(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, int image_format, int quality) {
+typedef struct image_write {
+	FILE *file;
+	bool  ok;
+} image_write_t;
+
+static void image_write_chunk(void *context, void *data, int size) {
+	image_write_t *write = context;
+	if (write->ok && fwrite(data, 1, size, write->file) != (size_t)size) {
+		write->ok = false;
+	}
+}
+
+bool _write_image(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, int image_format, int quality) {
+	if (path == NULL || bytes == NULL || bytes->buffer == NULL || w <= 0 || h <= 0 || format < 0 || format > 6) {
+		return false;
+	}
+	if ((u64)w * h * (format == 1 ? 1 : 4) > bytes->length) {
+		return false;
+	}
 	int            comp   = 0;
 	unsigned char *pixels = NULL;
 	unsigned char *rgba   = (unsigned char *)bytes->buffer;
@@ -19,6 +37,7 @@ void _write_image(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, int ima
 		comp = 4;
 #ifdef IRON_BGRA
 		pixels = (unsigned char *)malloc(w * h * comp);
+		if (pixels == NULL) { return false; }
 		for (int i = 0; i < w * h; ++i) {
 			pixels[i * 4]     = rgba[i * 4 + 2];
 			pixels[i * 4 + 1] = rgba[i * 4 + 1];
@@ -36,6 +55,7 @@ void _write_image(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, int ima
 	else if (format == 2) { // RGB1
 		comp   = 3;
 		pixels = (unsigned char *)malloc(w * h * comp);
+		if (pixels == NULL) { return false; }
 		for (int i = 0; i < w * h; ++i) {
 #ifdef IRON_BGRA
 			pixels[i * 3]     = rgba[i * 4 + 2];
@@ -51,6 +71,7 @@ void _write_image(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, int ima
 	else if (format > 2) { // RRR1, GGG1, BBB1, AAA1
 		comp    = 1;
 		pixels  = (unsigned char *)malloc(w * h * comp);
+		if (pixels == NULL) { return false; }
 		int off = format - 3;
 #ifdef IRON_BGRA
 		off = off == 0 ? 2 : off == 2 ? 0 : off; // Alpha stays in place
@@ -60,30 +81,74 @@ void _write_image(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, int ima
 		}
 	}
 
-	image_format == 0 ? stbi_write_jpg(path, w, h, comp, pixels, quality) : stbi_write_png(path, w, h, comp, pixels, w * comp);
+	image_write_t write = {.file = stbiw__fopen(path, "wb"), .ok = true};
+	if (write.file == NULL) {
+		write.ok = false;
+	}
+	else {
+		int encoded = image_format == 0 ? stbi_write_jpg_to_func(image_write_chunk, &write, w, h, comp, pixels, quality)
+		                                : stbi_write_png_to_func(image_write_chunk, &write, w, h, comp, pixels, w * comp);
+		if (!encoded) {
+			write.ok = false;
+		}
+#ifndef IRON_WASM
+		if (ferror(write.file) || fflush(write.file) != 0) {
+			write.ok = false;
+		}
+#endif
+		if (fclose(write.file) != 0) {
+			write.ok = false;
+		}
+	}
 
 	if (pixels != rgba) {
 		free(pixels);
 	}
+	return write.ok;
 }
 
-void iron_write_jpg(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, i32 quality) {
+bool iron_write_jpg(char *path, buffer_t *bytes, i32 w, i32 h, i32 format, i32 quality) {
 	// RGBA, R, RGB1, RRR1, GGG1, BBB1, AAA1
-	_write_image(path, bytes, w, h, format, 0, quality);
+	return _write_image(path, bytes, w, h, format, 0, quality);
 }
 
-void iron_write_png(char *path, buffer_t *bytes, i32 w, i32 h, i32 format) {
-	_write_image(path, bytes, w, h, format, 1, 100);
+bool iron_write_png(char *path, buffer_t *bytes, i32 w, i32 h, i32 format) {
+	return _write_image(path, bytes, w, h, format, 1, 100);
 }
 
-unsigned char *_encode_data;
-int            _encode_size;
-void           _encode_image_func(void *context, void *data, int size) {
-    memcpy(_encode_data + _encode_size, data, size);
-    _encode_size += size;
+typedef struct image_encode {
+	buffer_t *bytes;
+	bool      ok;
+} image_encode_t;
+
+void _encode_image_func(void *context, void *data, int size) {
+	image_encode_t *encode = context;
+	buffer_t       *bytes  = encode->bytes;
+	if (!encode->ok || size == 0) { return; }
+	if (size < 0 || (u32)size > UINT32_MAX - bytes->length) {
+		encode->ok = false;
+		return;
+	}
+	u32 required = bytes->length + size;
+	if (required > bytes->capacity) {
+		u32 capacity = bytes->capacity < 256 ? 256 : bytes->capacity > UINT32_MAX / 2 ? UINT32_MAX : bytes->capacity * 2;
+		if (capacity < required) { capacity = required; }
+		u8 *grown = realloc(bytes->buffer, capacity);
+		if (grown == NULL) {
+			encode->ok = false;
+			return;
+		}
+		bytes->buffer   = grown;
+		bytes->capacity = capacity;
+	}
+	memcpy(bytes->buffer + bytes->length, data, size);
+	bytes->length = required;
 }
 
 buffer_t *_encode_image(buffer_t *bytes, i32 w, i32 h, i32 format, i32 quality) {
+	if (bytes == NULL || bytes->buffer == NULL || w <= 0 || h <= 0 || w > INT32_MAX / 4 || (u64)w * h * 4 > bytes->length) {
+		return NULL;
+	}
 #ifdef IRON_BGRA
 	unsigned char *pixels = bytes->buffer;
 	for (int i = 0; i < w * h; ++i) {
@@ -92,13 +157,16 @@ buffer_t *_encode_image(buffer_t *bytes, i32 w, i32 h, i32 format, i32 quality) 
 		pixels[i * 4 + 2] = c;
 	}
 #endif
-	_encode_data = (unsigned char *)malloc(w * h * 4);
-	_encode_size = 0;
-	format == 0 ? stbi_write_jpg_to_func(&_encode_image_func, NULL, w, h, 4, bytes->buffer, quality)
-	            : stbi_write_png_to_func(&_encode_image_func, NULL, w, h, 4, bytes->buffer, w * 4);
-	buffer_t *buffer = malloc(sizeof(buffer_t));
-	buffer->buffer   = _encode_data;
-	buffer->length   = _encode_size;
+	buffer_t *buffer = calloc(1, sizeof(buffer_t));
+	if (buffer == NULL) { return NULL; }
+	image_encode_t encode = {.bytes = buffer, .ok = true};
+	i32 encoded = format == 0 ? stbi_write_jpg_to_func(&_encode_image_func, &encode, w, h, 4, bytes->buffer, quality)
+	                          : stbi_write_png_to_func(&_encode_image_func, &encode, w, h, 4, bytes->buffer, w * 4);
+	if (!encoded || !encode.ok || buffer->length == 0) {
+		free(buffer->buffer);
+		free(buffer);
+		return NULL;
+	}
 	return buffer;
 }
 

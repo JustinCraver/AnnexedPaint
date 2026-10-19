@@ -16,6 +16,27 @@ bool  args_api                    = false;
 bool  args_script                 = false;
 char *args_script_path            = "";
 
+static bool             args_failed         = false;
+static bool             args_export_done    = false;
+static i32              args_script_errors  = 0;
+static export_preset_t *args_texture_preset = NULL;
+
+static void args_fail(char *message) {
+	args_failed = true;
+	iron_set_exit_code(1);
+	iron_log("%s", message);
+}
+
+static bool args_require_values(i32 index, i32 count) {
+	for (i32 j = 1; j <= count; ++j) {
+		if (index + j >= iron_get_arg_count() || starts_with(iron_get_arg(index + j), "--") || string_equals(iron_get_arg(index + j), "")) {
+			args_fail(string("Missing arguments for %s", iron_get_arg(index)));
+			return false;
+		}
+	}
+	return true;
+}
+
 static char *args_path(char *path) {
 	if (data_is_abs(path) || data_is_up(path) || starts_with(path, "./")) {
 		return string_copy(path);
@@ -360,7 +381,8 @@ void args_parse() {
 			else if (path_is_texture(current_arg)) {
 				args_asset_path = args_path(current_arg);
 			}
-			else if (string_equals(current_arg, "--export-textures") && (i + 3) < iron_get_arg_count()) {
+			else if (string_equals(current_arg, "--export-textures")) {
+				if (!args_require_values(i, 3)) { break; }
 				args_export_textures = true;
 				++i;
 				args_export_textures_type = string_copy(iron_get_arg(i));
@@ -372,7 +394,8 @@ void args_parse() {
 			else if (string_equals(current_arg, "--reload-mesh")) {
 				args_reimport_mesh = true;
 			}
-			else if (string_equals(current_arg, "--export-mesh") && (i + 1) < iron_get_arg_count()) {
+			else if (string_equals(current_arg, "--export-mesh")) {
+				if (!args_require_values(i, 1)) { break; }
 				args_export_mesh = true;
 				++i;
 				args_export_mesh_path = args_path(iron_get_arg(i));
@@ -380,12 +403,14 @@ void args_parse() {
 			else if (path_is_mesh(current_arg) || iron_is_directory(current_arg)) {
 				args_asset_path = args_path(current_arg);
 			}
-			else if (string_equals(current_arg, "--export-material") && (i + 1) < iron_get_arg_count()) {
+			else if (string_equals(current_arg, "--export-material")) {
+				if (!args_require_values(i, 1)) { break; }
 				args_export_material = true;
 				++i;
 				args_export_material_path = args_path(iron_get_arg(i));
 			}
-			else if (string_equals(current_arg, "--script") && (i + 1) < iron_get_arg_count()) {
+			else if (string_equals(current_arg, "--script")) {
+				if (!args_require_values(i, 1)) { break; }
 				args_script = true;
 				++i;
 				args_script_path = args_path(iron_get_arg(i));
@@ -401,6 +426,7 @@ void args_parse() {
 				printf("  --export-textures <type> <preset> <path>\n");
 				printf("                                    Export textures to path\n");
 				printf("                                    type: png, jpg, exr16, exr32\n");
+				printf("                                    With --script, export runs after script callbacks finish\n");
 				printf("  --export-mesh <path>              Export mesh to path\n");
 				printf("  --export-material <path>          Export material to path\n");
 				printf("  --reload-mesh                     Reimport mesh on startup\n");
@@ -412,13 +438,91 @@ void args_parse() {
 				printf("  --help                            Show this help message\n");
 				exit(0);
 			}
+			else {
+				args_fail(string("Unknown argument: %s", current_arg));
+				break;
+			}
 			++i;
+		}
+		if ((i32)args_export_textures + (i32)args_export_mesh + (i32)args_export_material > 1 ||
+		    (args_api && (args_script || args_export_textures || args_export_mesh || args_export_material))) {
+			args_fail("Use one export operation; --api cannot be combined with --script or export");
 		}
 	}
 }
 
+static bool args_validate_export(void) {
+	if (!args_export_textures) {
+		return true;
+	}
+	if (!string_equals(args_export_textures_type, "png") && !string_equals(args_export_textures_type, "jpg") &&
+	    !string_equals(args_export_textures_type, "exr16") && !string_equals(args_export_textures_type, "exr32")) {
+		args_fail("Invalid texture type; expected png, jpg, exr16 or exr32");
+		return false;
+	}
+	if (!iron_is_directory(args_export_textures_path)) {
+		args_fail("Invalid export directory; an existing directory is required");
+		return false;
+	}
+	box_export_fetch_presets();
+	i32 index = string_array_index_of(box_export_files, args_export_textures_preset);
+	if (index < 0) {
+		args_fail(string("Unknown export preset: %s", args_export_textures_preset));
+		return false;
+	}
+	char     *file = string("export_presets/%s.json", args_export_textures_preset);
+	buffer_t *blob = data_get_blob(file);
+	if (blob == NULL) {
+		args_fail("Could not load export preset");
+		return false;
+	}
+	char *text          = sys_buffer_to_string(blob);
+	args_texture_preset = json_parse(text);
+	free(text);
+	data_delete_blob(file);
+	box_export_preset_index = index;
+	return true;
+}
+
+static void args_finish(void) {
+	if (args_background || args_failed) {
+		iron_stop();
+	}
+}
+
 void args_run_export_queue(void *_) {
-	export_texture_run(args_export_textures_path, false);
+	// A script may have changed the export UI. Apply the requested CLI settings
+	// only after its callbacks and previously queued native work have finished.
+	if (args_export_textures) {
+		i32 previous_bits = base_bits;
+		base_bits = string_equals(args_export_textures_type, "exr16") ? TEXTURE_BITS_BITS16 :
+		            string_equals(args_export_textures_type, "exr32") ? TEXTURE_BITS_BITS32 : TEXTURE_BITS_BITS8;
+		g_context->format_type = string_equals(args_export_textures_type, "jpg") ? TEXTURE_LDR_FORMAT_JPG : TEXTURE_LDR_FORMAT_PNG;
+		g_context->layers_export      = EXPORT_MODE_VISIBLE;
+		g_context->layers_destination = EXPORT_DESTINATION_DISK;
+		box_export_preset             = args_texture_preset;
+		if (previous_bits != base_bits) {
+			layers_set_bits();
+		}
+		if (!export_texture_run(args_export_textures_path, false)) {
+			args_fail("Texture export failed");
+		}
+		args_export_done = true;
+	}
+	else if (args_export_mesh) {
+		if (!iron_is_directory(args_export_mesh_path)) {
+			args_fail("Invalid export directory");
+		}
+		else {
+			char *f = string_equals(ui_files_filename, "") ? tr("untitled") : ui_files_filename;
+			export_mesh_run(string("%s%s%s", args_export_mesh_path, PATH_SEP, f), NULL);
+		}
+	}
+	else if (args_export_material) {
+		g_context->write_icon_on_export = true;
+		export_arm_run_material(args_export_material_path);
+	}
+	args_finish();
 }
 
 void args_run_api(void *_) {
@@ -426,47 +530,76 @@ void args_run_api(void *_) {
 	iron_stop();
 }
 
-static void args_run_script_quit(void *_) {
-	iron_stop();
-}
-
 void args_run_script_stop(void *_) {
+	if (minic_error_count > args_script_errors) {
+		args_fail("Script failed");
+		script_stop();
+		args_finish();
+		return;
+	}
 	if (script_is_running()) {
 		sys_notify_on_next_frame(&args_run_script_stop, NULL);
 		return;
 	}
-	sys_notify_on_next_frame(&args_run_script_quit, NULL);
+	sys_notify_on_next_frame(&args_run_export_queue, NULL);
 }
 
 void args_run_script(void *_) {
+	args_script_errors = minic_error_count;
 	char *data = NULL;
 	if (!iron_file_exists(args_script_path) && starts_with(args_script_path, "./")) {
 		data = tab_scripts_find(substring(args_script_path, 2, string_length(args_script_path)));
 	}
-	if (data != NULL) {
-		minic_eval(data);
-	}
-	else {
-		buffer_t *b = iron_load_blob(args_script_path);
+	buffer_t *b = NULL;
+	if (data == NULL) {
+		b = iron_load_blob(args_script_path);
 		if (b == NULL) {
-			iron_log(tr("Invalid script path"));
+			args_fail("Invalid script path");
 		}
 		else {
-			minic_eval(sys_buffer_to_string(b));
-			iron_delete_blob(b);
+			data = sys_buffer_to_string(b);
 		}
 	}
-	if (args_background) {
+	if (data != NULL) {
+		minic_ctx_t *ctx = minic_eval_named(data, args_script_path);
+		if (minic_error_count > args_script_errors || minic_ctx_result(ctx) != 0.0f) {
+			args_fail("Script failed");
+			script_stop();
+		}
+	}
+	if (b != NULL) {
+		free(data);
+		iron_delete_blob(b);
+	}
+	if (args_failed) {
+		args_finish();
+	}
+	else if (args_background || args_export_textures || args_export_mesh || args_export_material) {
 		sys_notify_on_next_frame(&args_run_script_stop, NULL);
 	}
 }
 
 void args_run_on_next_frame(void *_) {
+	if (args_failed || !args_validate_export()) {
+		args_finish();
+		return;
+	}
 	if (!string_equals(g_project->_->filepath, "")) {
-		import_arm_run_project(g_project->_->filepath);
+		if (!import_arm_run_project(g_project->_->filepath)) {
+			args_fail("Project import failed");
+			args_finish();
+			return;
+		}
 	}
 	else if (!string_equals(args_asset_path, "")) {
-		import_asset_run(args_asset_path, -1, -1, false, true, NULL);
+		if (path_is_mesh(args_asset_path)) {
+			if (!import_mesh_run(args_asset_path, true, true, false)) {
+				args_fail("Mesh import failed");
+				args_finish();
+				return;
+			}
+		}
+		else import_asset_run(args_asset_path, -1, -1, false, true, NULL);
 		if (path_is_texture(args_asset_path)) {
 			ui_base_show_2d_view(VIEW_2D_TYPE_ASSET);
 		}
@@ -475,77 +608,23 @@ void args_run_on_next_frame(void *_) {
 		project_reimport_mesh();
 	}
 
-	if (args_export_textures) {
-		if (!path_is_folder(args_export_textures_path)) {
-			iron_log(tr("Invalid export directory"));
-		}
-
-		if (string_equals(args_export_textures_type, "png")) {
-			base_bits              = TEXTURE_BITS_BITS8;
-			g_context->format_type = TEXTURE_LDR_FORMAT_PNG;
-		}
-		else if (string_equals(args_export_textures_type, "jpg")) {
-			base_bits              = TEXTURE_BITS_BITS8;
-			g_context->format_type = TEXTURE_LDR_FORMAT_JPG;
-		}
-		else if (string_equals(args_export_textures_type, "exr16")) {
-			base_bits = TEXTURE_BITS_BITS16;
-		}
-		else if (string_equals(args_export_textures_type, "exr32")) {
-			base_bits = TEXTURE_BITS_BITS32;
-		}
-		else {
-			iron_log(tr("Invalid texture type"));
-		}
-
-		g_context->layers_export = EXPORT_MODE_VISIBLE;
-
-		// Get export preset and apply the correct one from args
-		box_export_files = file_read_directory(string("%s%sexport_presets", path_data(), PATH_SEP));
-		for (i32 i = 0; i < box_export_files->length; ++i) {
-			char *s                     = box_export_files->buffer[i];
-			box_export_files->buffer[i] = substring(s, 0, string_length(s) - 5); // Strip .json
-		}
-
-		char *file = string("export_presets/%s.json", box_export_files->buffer[0]);
-		for (i32 i = 0; i < box_export_files->length; ++i) {
-			char *f = box_export_files->buffer[i];
-			if (string_equals(f, args_export_textures_preset)) {
-				file = string("export_presets/%s.json", box_export_files->buffer[array_index_of(box_export_files, f)]);
-			}
-		}
-
-		buffer_t *blob    = data_get_blob(file);
-		box_export_preset = json_parse(sys_buffer_to_string(blob));
-		data_delete_blob(file);
-
-		// Export queue
-		sys_notify_on_next_frame(&args_run_export_queue, NULL);
-	}
-	else if (args_export_mesh) {
-		if (!path_is_folder(args_export_mesh_path)) {
-			iron_log(tr("Invalid export directory"));
-		}
-
-		char *f = ui_files_filename;
-		if (string_equals(f, "")) {
-			f = string_copy(tr("untitled"));
-		}
-		export_mesh_run(string("%s%s%s", args_export_mesh_path, PATH_SEP, f), NULL);
-	}
-	else if (args_export_material) {
-		g_context->write_icon_on_export = true;
-		export_arm_run_material(args_export_material_path);
-	}
-
 	if (args_api) {
 		sys_notify_on_next_frame(&args_run_api, NULL);
 	}
 	else if (args_script) {
 		sys_notify_on_next_frame(&args_run_script, NULL);
 	}
-	else if (args_background) {
-		iron_stop();
+	else {
+		sys_notify_on_next_frame(&args_run_export_queue, NULL);
+	}
+}
+
+void args_check_result(void) {
+	if (args_script && minic_error_count > args_script_errors) {
+		args_fail("Script failed");
+	}
+	if (!args_failed && args_export_textures && !args_export_done) {
+		args_fail("Stopped before texture export completed");
 	}
 }
 

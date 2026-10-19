@@ -1,0 +1,15 @@
+#include "global.h"
+
+void prepared() {
+	printf("EXPORT SCRIPT READY");
+}
+
+void paint_fixture() {
+	script_layer_new_color(0xff336699, 1.0, 0.25, 0.0);
+	script_notify_on_next_frame(prepared);
+}
+
+void main() {
+	// The CLI must wait for both callbacks, then apply its export type/preset.
+	script_notify_on_next_frame(paint_fixture);
+}

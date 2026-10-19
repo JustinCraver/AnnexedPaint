@@ -209,6 +209,7 @@ void iron_internal_paste_callback(char *value) {
 }
 
 static bool running                = false;
+static int  exit_code              = 0;
 static char application_name[1024] = {"Iron Application"};
 
 const char *iron_application_name(void) {
@@ -221,6 +222,14 @@ void iron_set_app_name(const char *name) {
 
 void iron_stop(void) {
 	running = false;
+}
+
+void iron_set_exit_code(int code) {
+	exit_code = code;
+}
+
+int iron_get_exit_code(void) {
+	return exit_code;
 }
 
 bool iron_internal_frame(void) {

@@ -3,6 +3,8 @@
 
 static f32             export_texture_gamma       = 1.0 / 2.2;
 static string_array_t *export_texture_baked_files = NULL;
+static bool            export_texture_success;
+static i32             export_texture_written;
 
 static i32  _export_texture_channel(i32 c, i32 bits);
 static f32  _export_texture_get_value(buffer_t *b, i32 pixel, i32 channel, i32 bits);
@@ -97,19 +99,27 @@ static void export_texture_write_texture(char *file, buffer_t *pixels, i32 type,
 		return;
 	}
 
+	bool ok;
 	if (bits == 8 && g_context->format_type == TEXTURE_LDR_FORMAT_PNG) {
-		iron_write_png(file, pixels, res_x, res_y, format);
+		ok = iron_write_png(file, pixels, res_x, res_y, format);
 	}
 	else if (bits == 8 && g_context->format_type == TEXTURE_LDR_FORMAT_JPG) {
-		iron_write_jpg(file, pixels, res_x, res_y, format, math_floor(g_context->format_quality));
+		ok = iron_write_jpg(file, pixels, res_x, res_y, format, math_floor(g_context->format_quality));
 	}
 	else { // Exr
 		buffer_t *b = export_exr_run(res_x, res_y, pixels, bits, type, off);
-		iron_file_save_bytes(file, b, b->length);
+		ok = iron_file_save_bytes(file, b, b->length);
 		array_free(b);
 		free(b);
 	}
-	export_texture_bake_material_add_texture(file);
+	if (ok) {
+		export_texture_written++;
+		export_texture_bake_material_add_texture(file);
+	}
+	else {
+		export_texture_success = false;
+		console_error(string("Could not export texture: %s", file));
+	}
 }
 
 static i32 _export_texture_channel(i32 c, i32 bits) {
@@ -712,7 +722,9 @@ static void export_texture_run_bake_material(char *path) {
 	}
 }
 
-void export_texture_run(char *path, bool bake_material) {
+bool export_texture_run(char *path, bool bake_material) {
+	export_texture_success = true;
+	export_texture_written = 0;
 
 	// Exporting without opening the export box
 	if (box_export_files == NULL) {
@@ -841,6 +853,10 @@ void export_texture_run(char *path, bool bake_material) {
 		}
 	}
 
+	if (!export_texture_success || (g_context->layers_destination == EXPORT_DESTINATION_DISK && export_texture_written == 0)) {
+		console_error(tr("Could not export textures"));
+		return false;
+	}
 #ifdef IRON_IOS
 	if (config_is_iphone()) {
 		console_info(string("%s (\"Files/On My iPhone/%s\")", tr("Textures exported"), manifest_title));
@@ -854,4 +870,5 @@ void export_texture_run(char *path, bool bake_material) {
 	console_info(tr("Textures exported"));
 #endif
 	ui_files_last_path = "";
+	return true;
 }

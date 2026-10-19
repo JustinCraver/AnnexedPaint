@@ -156,7 +156,7 @@ int kickstart(int argc, char **argv) {
 #ifdef IRON_AUDIO
 	iron_a2_shutdown();
 #endif
-	return 0;
+	return iron_get_exit_code();
 }
 
 i32 iron_get_arg_count() {

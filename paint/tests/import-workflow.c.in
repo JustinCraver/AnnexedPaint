@@ -1,0 +1,115 @@
+#include "global.h"
+
+char            *mode     = "@MODE@";
+char            *source   = "@SOURCE@";
+char            *folder   = "@FOLDER@";
+int              failures = 0;
+int              checks   = 0;
+project_t       *before_project;
+mesh_data_t     *before_geometry;
+slot_layer_t    *before_layer;
+slot_material_t *before_material;
+char            *before_recent;
+char            *before_path;
+
+void check(int ok, char *message) {
+	checks++;
+	if (!ok) {
+		failures++;
+		printf("IMPORT CHECK FAIL %s", message);
+	}
+}
+
+void finished() {
+	if (failures == 0)
+		printf("IMPORT WORKFLOW PASS %s checks=%d", mode, checks);
+}
+
+void verify_preserved() {
+	check(script_get_project() == before_project, "project identity preserved");
+	check(context_main_object()->data == before_geometry, "geometry identity preserved");
+	check(script_layer_count() == 2 && script_layer_get("preserved_color") == before_layer, "paint layers preserved");
+	check(before_layer->mask_opacity == 0.625, "layer metadata preserved");
+	check(script_get_material("preserved_material") == before_material, "material identity preserved");
+	check(string_equals(sys_title(), "unsaved import sentinel* - ArmorPaint"), "dirty title preserved");
+	check(string_equals(project_filepath_get(), before_path), "filepath preserved");
+	check(string_equals(before_recent, string_array_join(script_get_config()->recent_projects, "\n")), "recent projects preserved");
+	check(script_get_texture("asset.svg") != NULL, "texture reference preserved");
+	check(script_get_object("preserved_mesh") != NULL, "object name preserved");
+	check(script_timeline_get_frame() == 7, "timeline preserved");
+	finished();
+}
+
+void reject_input() {
+	// The active project has unsaved edits to an existing project path.
+	project_filepath_set(string_copy(string("%s/saved.arm", folder)));
+	before_project  = script_get_project();
+	before_geometry = context_main_object()->data;
+	before_layer    = script_layer_get("preserved_color");
+	before_material = script_get_material("preserved_material");
+	before_recent   = string_copy(string_array_join(script_get_config()->recent_projects, "\n"));
+	before_path     = project_filepath_get();
+	sys_title_set("unsaved import sentinel* - ArmorPaint");
+	if (string_equals(mode, "append"))
+		script_append_mesh(source);
+	else
+		script_import_asset(source, false);
+	script_notify_on_next_frame(verify_preserved);
+}
+
+void verify_loaded() {
+	check(script_layer_count() == 2 && script_layer_get("preserved_color") != NULL, "layers loaded");
+	check(script_layer_get("preserved_color")->mask_opacity == 0.625, "layer data loaded");
+	check(script_get_material("preserved_material") != NULL, "named material loaded");
+	check(script_get_texture("asset.svg") != NULL, "asset reference loaded");
+	check(script_get_object("MeshA") != NULL && script_get_object("MeshB") != NULL, "both glTF objects loaded");
+	object_t *a = script_get_object("MeshA");
+	object_t *b = script_get_object("MeshB");
+	if (a != NULL && b != NULL) {
+		mesh_object_t *ma = a->ext;
+		mesh_object_t *mb = b->ext;
+		check(ma->data->index_array->length == 3 && mb->data->index_array->length == 3, "both live triangle meshes retained");
+	}
+	finished();
+}
+
+void saved() {
+	check(iron_file_exists(source), "valid project saved");
+	finished();
+}
+
+void save_fixture() {
+	script_object_set_material(script_get_object("MeshB"), script_get_material("preserved_material"));
+	project_filepath_set(source);
+	project_save(false);
+	script_notify_on_next_frame(saved);
+}
+
+void main() {
+	if (string_equals(mode, "read")) {
+		script_project_open(source);
+		script_notify_on_next_frame(verify_loaded);
+		return;
+	}
+	slot_layer_t *layer = script_layer_new_color(0xff336699, 1.0, 0.25, 0.0);
+	script_layer_set_name(layer, "preserved_color");
+	layer->mask_opacity       = 0.625;
+	slot_material_t *material = script_material_create("preserved_material");
+	ui_node_t       *noise    = script_material_create_node("TEX_NOISE");
+	script_material_set_float(noise, true, 1, 8.0);
+	script_import_asset(string("%s/asset.svg", folder), false);
+	script_set_pack_assets(true);
+	object_t *object = context_main_object()->base;
+	object->name     = string_copy("preserved_mesh");
+	script_timeline_add_keyframe("preserved_mesh", 0);
+	object->transform->loc.x = 2.5;
+	transform_build_matrix(object->transform);
+	script_timeline_add_keyframe("preserved_mesh", 7);
+	script_timeline_set_frame(7);
+	if (string_equals(mode, "prepare")) {
+		script_append_mesh(string("%s/valid.gltf", folder));
+		script_notify_on_next_frame(save_fixture);
+	}
+	else
+		script_notify_on_next_frame(reject_input);
+}

@@ -101,6 +101,8 @@ int                 iron_hardware_threads(void);
 double              iron_time(void);
 void                iron_start(void);
 void                iron_stop(void);
+void                iron_set_exit_code(int code);
+int                 iron_get_exit_code(void);
 void                iron_set_keep_screen_on(bool on);
 void                iron_exec_async(const char *path, char *argv[]);
 extern volatile int iron_exec_async_done;

@@ -3,11 +3,14 @@
 Reviewed **2026-10-18** in `C:\Annexed Games\Annexed Paint`, branch `main`, starting
 at `9190a9398fa6b4e91c990e771d399cb7c299a018`. The tracked/untracked working tree
 was clean before this pass. Existing ignored `paint/build/` artifacts and receipts
-were preserved. The initial review changes are now recorded in `43a52c886`;
-the P1-01 follow-up below remains local and uncommitted.
+were preserved. The initial review changes are recorded in `43a52c886` and P1-01
+in `e0bb782450b8a808d565df2c17443b1e2755c3e9`. P1-02 started from that clean
+`main` checkout; its implementation, tests and documentation remain uncommitted.
+P1-03 began at the same base with that uncommitted P1-02 work present and
+preserved; the P1-03 implementation and evidence below are also uncommitted.
 
-These began as **recommendations, not approved roadmap commitments**. P1-01 was
-subsequently explicitly requested for implementation; the other items remain
+These began as **recommendations, not approved roadmap commitments**. P1-01,
+P1-02 and P1-03 were subsequently explicitly requested for implementation; the other items remain
 proposals. No separate
 Annexed product specification, roadmap, prior review or Space binding was found.
 Upstream application identity, licenses and platform recipes remain intentional
@@ -67,7 +70,7 @@ fixtures or portable guarantees. Keep failed receipts alongside later passes.
 | First fixed executable, seven focused checks | 7/7 passed. `paint/build/tests/a3e56be746c04a959982d3356e1ebdfc/results.json` |
 | Existing editor exercise, first adapted run | All 26 checks ran, 1 failed (texture lookup/delete by filename after forward-slash import); process still exited 0. `editor-workflow.stdout.log` in the preceding directory. This prompted the bounded texture-name fix. |
 | Save failure probe | Missing parent directory: logged `Project saved`, exited 0, no project file existed. `save-failure.*.log` in the preceding directory. Baseline failure retained; addressed by the P1-01 follow-up below. |
-| Background texture export | Valid `png base_color` request exited 0 without creating files. Invalid type/preset also exited 0. `batch-valid.*.log`, `batch-invalid.*.log` in the preceding directory. Unfixed; P1-02. |
+| Background texture export | Valid `png base_color` request exited 0 without creating files. Invalid type/preset also exited 0. `batch-valid.*.log`, `batch-invalid.*.log` in the preceding directory. Original review failure; addressed by P1-02 below. |
 | Final incremental build, texture-name fix | Passed. `paint/build/review-2026-10-18/final-build-path-name.log`; generated version SHA is `9190a93`. |
 | Final focused regressions | **8/8 passed**, all exits zero. `paint/build/tests/56ec27d9669d40b8b64a53af05e07bb0/results.json` |
 | Final existing editor exercise | **26 checks, 0 failures, TEST PASS**, exit 0. Only the copied script's output root was adapted. `editor-workflow.stdout.log` in the final test directory. Produced `.arm`, `.obj` and five PNG outputs. |
@@ -150,27 +153,185 @@ exited `0xC0000005` after save/content assertions passed, including
 (`packed-exit-fabe8644f616493781c8f0edd48cdec3`); that does not erase the failed
 aggregates. Debug-wrapper attempts timed out without establishing a crash cause
 (`save-d77566dd66444e5c969d68f3d40c0915`,
-`save-5c25ae0dd56c467da4a3a451dab45f84`). The focused save fixture now calls the
-existing `script_quit()` only after its assertions, while a separate watchdog
-still verifies native save-and-quit. Native process exit zero remains required;
-the original 30-second limits and all failed receipts are retained. The automatic
-shutdown failure remains open alongside P1-02; no causal or renderer fix is claimed.
+`save-5c25ae0dd56c467da4a3a451dab45f84`). That P1-01 fixture used
+`script_quit()` after its assertions as a temporary bypass. P1-02 below identifies
+and fixes an encoded-image heap overrun and removes that bypass. The separate
+watchdog still verifies native save-and-quit. Native process exit zero, the
+original 30-second limits and all failed receipts are retained.
 
 Not qualified: interactive file pickers/device painting, real full disks or
 power loss, special filesystem/link/ACL metadata, legacy compatibility, native
 POSIX/mobile runs, a full WASM build, or browser/cloud completion. Controlled
 write failures and selected native round trips are the acceptance evidence here.
 
+## P1-02 implementation and verification (2026-10-18)
+
+**Implemented:** background texture export completes before shutdown. Type,
+existing destination directory and exact preset selection are validated before
+running the import/script/export sequence. Invalid or missing options, conflicting
+exports/API flags, missing scripts, interpreter errors (including later frame
+callbacks), nonzero script results and texture write failures return **1**.
+Successful completion returns **0** through the native entry point without a
+modal error dialog. Unknown presets produce no fallback output.
+
+- `args.c` uses the existing frame callbacks. With `--script --export-textures`,
+  the script runs first on the opened project; its finite next-frame/update
+  callbacks finish before CLI export settings are applied and the export runs.
+  An explicit script quit before the requested texture export completes fails.
+  The [development guide](readme.md) records the combined-flag contract and command.
+- PNG/JPEG writers check encoding, each write, flush and close. EXR uses the
+  existing checked byte writer. Texture export aggregates failures, returns a
+  boolean and suppresses `Textures exported` on failure. Script writer/export
+  declarations expose the boolean results. A partial multichannel failure can
+  leave earlier channel files; it returns failure and identifies the failed file.
+- CLI EXR conversion now tolerates undo textures that have not been allocated.
+  The first focused native run exposed this separate null-history dereference.
+- **Automatic-exit cause:** `iron_image.c:_encode_image()` allocated `w*h*4`
+  bytes, then copied variable-sized codec chunks without a capacity check. The
+  packed 4x4 SVG fixture produces a **78-byte PNG in a 64-byte allocation**; a
+  1x1 PNG needs **70 bytes in a 4-byte allocation**. These files can decode and
+  pass content assertions while the heap is already corrupted. The encoder now
+  owns a local buffer, checks/grows capacity before every chunk and initializes
+  its length/capacity. Encoding/size/allocation failures return no encoded buffer.
+  The `.arm` encoding and script permission boundaries are unchanged.
+
+The original executable reproduced **3 access violations in 12** packed-save
+runs. A debug-heap-disabled diagnostic run captured a post-assertion access
+violation during `combase`/CRT process teardown. COM cleanup alone did not resolve
+it: a later aggregate still crashed. That exploratory cleanup was removed from
+the final patch after the guarded encoder test established the overwrite. No
+renderer or COM lifecycle fix is claimed. Retained receipts are ignored local
+evidence; later passing runs do not erase them.
+
+| Check | Actual result / ignored local evidence |
+| --- | --- |
+| Final Windows x64 / Direct3D12 Release build | Passed with existing warnings. `paint/build/review-2026-10-18/p1-02-final-db2b92fdde3c48c582f20d7f61473db4/build-final.log` |
+| Original packed-save automatic exit | **3/12 access violations**, no timeouts. `paint/build/tests/p1-02-crash-699852de36b142488ebc99f75bce3a43/results.json`; teardown stack in `heap-debug-7.stdout.log` in that directory. Normal debug-heap runs masked the failure. |
+| Original encoder with guarded allocator | **13 assertions, 7 failures; 6 overwritten guards**, expected exit 1. All six PNG/JPEG files still decoded. `paint/build/tests/encode-original-0f25c0b1489d42568f464780679e1817/test.log`. This directly includes the original encoder extracted from base commit `e0bb782`, with guarded heap storage. |
+| Fixed production image writer and encoder | **10 writer assertions + 13 encoder assertions, 0 failures**. Short-write/flush/close errors, missing directory, small and incompressible PNG/JPEG, decoded dimensions/color and intact allocation guards. `paint/build/tests/export-af42569ade274ebaa6f73a4d204c3771/` (and `export-b0761e0bdb7444afb5d49c82383f542c/`). No GPU is required. |
+| Full focused export and shutdown suite | **74/74 checks passed**, no timeouts (`-ShutdownRepeats 24`): unit writer/encoder, `--help`, script writer status, direct/scripted 2048x2048 PNG/JPEG/EXR16/EXR32 exports with independent decode/pixel checks, exact `generic` five-channel output, 14 invalid CLI/combination cases, 6 script/callback/early-quit failure cases with zero fallback files, 4 locked-file preservations, partial multichannel failure evidence, and **24/24 automatic packed-save exits**. `paint/build/tests/export-165a405941644e6c9abff0973ccd8c8c/results.json` (and `export-aaff145c306540dfaafca6738093a7ee/results.json`). |
+| Full save suite with automatic CLI shutdown | **16/16 checks passed**, no timeouts, with `script_quit()` removed from `save-workflow.c.in` so all native save/reopen/pixel checks exit via normal CLI completion. `paint/build/tests/save-cbea75e76f684de19a889a40e839972a/results.json` (and `save-573975206cb0456faf1d0e99c0b35fe1/results.json`). |
+| Existing native import/startup smoke suite | **8/8 passed**, exits zero. `paint/build/tests/8308bf47e2e54a6a97e98b85f752c2a2/results.json` (and `202db4dd36c8440a9679b7285436ffb3/results.json`). |
+| Browser source syntax | All four touched C modules (`iron_image.c`, `args.c`, `export_texture.c`, `util_layer.c`) passed `wasm32` syntax checks with bundled `miniclib` headers after guarding `ferror`/`fflush` in `_write_image` with `#ifndef IRON_WASM`. `wasm-syntax.json` in the final build receipt directory. This is not a WASM link or browser run. |
+
+Final P1-02 executable SHA-256:
+`6DB4912F16F1CFE2EDD88FD134BCCFD235347567BD309F7F5EEE86B6750209F5`.
+Generated base SHA is `e0bb782`; `source-hashes.json` in the final build receipt
+directory identifies the uncommitted implementation, tests and documentation.
+
+Additional retained failures: `export-791c307abb234c629081afd8cf64563b` failed
+to compile `export-inspect.c` before renaming its `u32` helper and switching to
+`stbi_load_from_memory`. `export-db4c01e4ea594416b3843da7eeb1c2ee` exposed
+the CLI EXR null-history defect and two invalid runtime-error fixtures (division
+by zero evaluates to zero in this interpreter; array bounds errors now exercise
+the real error path). `export-58fe9a7fce7849ea87d7f65dcb5c12fa` retained another
+post-assertion automatic-exit crash before the encoder fix and a new test fixture
+that incorrectly accessed a private layer field. Its corrected fixture uses the
+existing buffer API. Initial allocator instrumentation exhausted its tracking
+slots (`export-f0823188c9144b938a54f23e6d594b72`,
+`encode-baseline-7240a2bbff6b4ec8a328da07d49ff337`); the bounded test allocator was
+corrected before the complete original/fixed comparison above. The first
+baseline setup also lacked an SVG copy; the complete 12-run crash cohort supplied
+the fixture explicitly. Initial `wasm32` syntax probes failed until `-nostdlibinc`
+and the `#ifndef IRON_WASM` guard in `iron_image.c` were applied. Running the
+PowerShell harness under Windows PowerShell 5.1 exposed `/Fo:` trailing-backslash
+quoting (`export-57e9726d007e42249771495bfb9f38ac`,
+`save-aa8b5b26252847d58803e971f78de1c9`) and uncached `Start-Process` exit codes
+(`export-31c72bf92d5345abb8f9a269b859f429`) before `export-windows.ps1` passed an
+explicit `.obj` path and cached `$process.Handle`. These setup failures are not
+product passes.
+
+Not qualified: interactive painting/dialogs/stylus input, audio playback, every
+texture preset/resolution, physical disk/power-loss behavior, malformed project
+imports (P1-03), other native platforms or browser/cloud completion. The focused
+Windows checks cover the selected CLI workflows and the demonstrated heap overrun.
+
+## P1-03 implementation and verification (2026-10-18)
+
+**Implemented:** project import stages checked data before changing the active
+project. Rejected files report an error containing the path and retain the
+project, mesh/layer/material resources, dirty title, filepath and recent files.
+Registry mesh import validates every record before replacing or adding objects;
+a null or invalid later record rejects the stream. Invalid project/plug-in mesh
+CLI inputs return **1** before running the requested script/export sequence.
+
+- `io/import_arm_validate.c`, included by `import_arm.c` in the existing app
+  translation unit, decodes by field name into owned staging allocations. It
+  checks file bounds, counts/types, duplicate fields, required arrays, mesh
+  layouts/indices, transforms, material/object references, hierarchy cycles,
+  layer dimensions/bit depths and exact LZ4 sizes before `project_new()`.
+  Failed decoder staging allocations are released. Open, append, material,
+  brush and swatch entry points use the checked decoder. No standalone build
+  input was added and `.arm` encoding was not changed.
+- Format versions **0-19**, the historical trailing zero byte and old
+  `fill_layer` reference remain supported. Compatibility defaults follow
+  `import_legacy.c`; generated fixtures test them. Two-component brush UV
+  vectors remain valid. Imported-script trust checks and `auto_run_scripts`
+  routing remain in their existing owners after validation.
+- `iron_lz4.c` bounds literal/match lengths, offsets and output size before
+  copying. The same checked reader supports allocation-free preflight and the
+  subsequent decoder. Mask/paint/sculpt and timeline payloads are checked
+  against their expected byte counts.
+- glTF checks buffer-load status, accessor bounds/counts, triangle indices and
+  node cycles before emitting geometry; failure resets reader iteration.
+  **Multiple primitives are explicitly rejected for the whole file.** The
+  native preservation fixture covers that rejection. The existing raw-mesh
+  contract has no primitive/material mapping; no merge rule, material splitting
+  or glTF material-definition import was inferred. Sparse accessors and
+  non-triangle primitives are also rejected.
+
+The repeatable command is `./paint/tests/import-windows.ps1`; `-SkipNative`
+runs the decoder, compression, staged-stream and glTF checks without a GPU.
+See the [development guide](readme.md) for coverage and unsupported inputs.
+
+| Check | Actual result / ignored local evidence |
+| --- | --- |
+| Windows x64 / Direct3D12 Release build | Passed with compiler warnings. `paint/build/review-2026-10-18/p1-03-e3d4f933f3ef4b479de849e543f92006/build-final.log` |
+| Production decoder, stream and compression harnesses | **51 decoder + 7 stream + 11 LZ4 assertions, 0 failures** in the final fixture invocation. Every truncated prefix ends at an unreadable guard page; every decoder allocation failure must release staging. Includes reordered/duplicate/mistyped fields, oversized counts and overflow dimensions, invalid references/cycles, short transforms, bad indices and corrupt LZ4. The stream owner/canvas encoder are extracted unchanged from production, with hashes; importer and scene commits are controlled callbacks. `paint/build/tests/import-f9c0d41f715f417990ab1d61555e9422/` |
+| Focused import suite | **65/65 checks passed**, no timeouts. Includes two bundled mesh scenes; seven corrupt/unsupported glTF cases followed by valid two-object reads; generated versions 0-19 in the decoder; native rejection preserving populated state; missing-buffer append; and two CLI failures with **zero export files**. `results.json` in the same run directory |
+| Valid native project and compatibility fixtures | Three objects, both named glTF triangles, paint layers, a named material and packed texture reopen. Independent decoding verifies object/material mapping; native reads verify both live triangle meshes. Generated versions **4, 9, 18, 19** also reopen; versions 0-6 use `fill_layer`. These are generated compatibility fixtures, not historical archived project files. `saved.arm`, `valid-version-*.arm`, `project-import-test.log` and per-read logs in the same directory |
+| Existing save suite | **16/16 passed**, all native timeout fields false; all five PNG channel hashes match before/after reopen for both external and packed texture fixtures. `paint/build/tests/save-e1ea849898654188b541bffce355dc2d/results.json` |
+| Existing export/shutdown suite | **62/62 passed**, no timeouts, including the default **12/12 automatic packed-save exits**. `paint/build/tests/export-d5b9ac99d2bf4141a5810473d07da831/results.json` |
+| Existing startup/import smoke suite | **8/8 passed**, exits zero, no timeouts. `paint/build/tests/1578591b6c3a479aa621e45f15220990/results.json` |
+| Browser source probes | `import_arm_validate.c`, `import_arm.c`, `import_mesh.c`, `args.c` and `iron_lz4.c` passed `wasm32` syntax with bundled headers. The native glTF module and its original HEAD version both fail that probe on existing missing `strrchr`/`atoi` declarations in the minimal headers. Initial/final probe logs and `wasm-syntax.json` are in the build receipt directory. No full WASM link or browser run is claimed. |
+
+Final P1-03 executable SHA-256:
+`93EF97EBFE6E878CF826EAEDF583EE82F4E05FE417E33411DCAE9905BF8BC3BB`.
+Generated base SHA is `e0bb782`; `source-hashes.json` in the build receipt
+directory identifies the full uncommitted implementation, tests and documentation,
+including the preserved P1-02 work. `starting.diff` records the starting changes.
+
+**Retained failures:** the first build placed the append error message in the
+wrong callback (`build-1.log`); subsequent builds corrected it. Initial standalone
+harness compilation/link failures remain in `import-b8574553a1134be0903e487e78381c28`,
+`import-ff34a73d31fe4ddf86106710e480e433`,
+`import-41461e3033694623a1cace388f75e380` and
+`import-a5ee9e0421be48e8afa5bd68de6759c6`. Early native fixtures accessed script
+fields that are not exposed (`import-78c89abdeae84baeaaf6c4a2f1083cf9`,
+`import-c205008afc294ca18267261ddec92f6e`); raw default material/brush canvases
+were also incorrectly treated as project files in the first harness. The first
+populated native fixture exposed an overly strict three-component vector check
+on valid brush UV data (`import-94ac6a19a7d7418da42f0f9f2dc32624`), now corrected.
+The later `import-d23622348c58444897ac3b686277585e` passed all native preservation
+and reopen cases but its two CLI tests used the wrong argument order; the final
+run uses the documented order and requires the import failure message. These
+receipts are retained and are not product passes.
+
+Not qualified: every malformed format/codec, archived legacy projects, OBJ/Blender/
+FBX parser internals, GPU/resource exhaustion during reconstruction, interactive
+dialogs/painting/stylus input, other native platforms, browser/cloud operation,
+or broader glTF primitive/material semantics. The initial P1-03 safety boundary
+is implemented with the focused cases above; multi-primitive import remains
+explicitly unsupported rather than silently incomplete.
+
 ## Recommended next actions
 
-1. **P1-02: fix background export completion and CLI failure reporting.** The
-   advertised command currently succeeds without its requested output; this also
-   undermines automation and future regression tests.
-2. **P1-03: validate imports before changing the active project.** Start with
-   malformed `.arm` and missing glTF buffers, then expand to other concrete cases.
+1. **P2-04: make the existing editor/interpreter checks repeatable.** The focused
+   save/export/import commands now exist; the older interpreter/editor exercises
+   still have the limitations recorded below. This remains a proposal.
 
-P1-01's native write/completion change is implemented with the evidence and
-limits above. These next actions can preserve existing product intent. A later decision is
+P1-01, P1-02 and the bounded P1-03 changes are implemented with the evidence and
+limits above. A later decision is
 needed on the fork's supported-platform and product direction (P2-06); it need
 not block these bounded correctness work items.
 
@@ -204,11 +365,11 @@ after confirmed completion.
 
 ### P1-02 — Finish queued exports before background shutdown
 
-The P1-01 follow-up also retained automatic background-script exit access
-violations after successful assertions; see the receipts and unresolved-cause
-boundary above. Explicit test cleanup is not a fix or qualification of that path.
+**Status:** implemented; Windows results, retained failures and qualification
+limits are recorded in the P1-02 section above. The temporary explicit-quit test
+bypass has been removed.
 
-**Confirmed defect:** `args.c:args_run_on_next_frame()` queues texture export for
+**Original confirmed defect:** `args.c:args_run_on_next_frame()` queues texture export for
 the next frame, then calls `iron_stop()` for `--background`. A valid request to
 an empty, existing output folder created no files and returned zero. Invalid type
 only logs an error, unknown presets fall back to the first preset, and
@@ -217,10 +378,11 @@ check. CLI script failures similarly are not reliably represented by exit code.
 
 **Impact:** unattended conversion and automated checks can silently produce no
 output or the wrong format/channel mapping.
-**Smallest approach:** validate options and exact preset selection first; keep
-background execution alive until requested operations finish and propagate a
-nonzero result for failures. Reuse current frame callbacks instead of adding a
-job framework. Define behavior for combined script/export flags explicitly.
+**Implemented approach:** validate options and exact preset selection first;
+chain existing script/export frame callbacks, aggregate checked writer results,
+and return nonzero for failures. Grow encoded-image buffers before copying codec
+chunks to prevent packed-asset heap corruption. Combined script/export behavior
+and the dedicated regression command are documented in the development guide.
 **Effort/risk:** 1–3 days; callback ordering and asynchronous GPU work matter.
 **Success:** valid texture export writes the expected decoded images before exit;
 bad type, preset, destination, missing arguments and script errors fail clearly
@@ -229,7 +391,11 @@ with spaces and a directory with a dot in its name.
 
 ### P1-03 — Reject malformed project/mesh inputs without destroying current work
 
-**Source-confirmed validation gaps; full failure impact untested:**
+**Status:** staged validation implemented; focused Windows results and remaining
+input/platform limits are recorded above. Multiple glTF primitives are explicitly
+rejected until a preservation contract is defined.
+
+**Original source-confirmed validation gaps; full failure impact untested at review:**
 `io/import_arm.c:import_arm_run_project()` decodes and dereferences project fields
 without a complete validation phase, then calls `project_new()` before finishing
 reconstruction. `paint/plugins/io_gltf/cgltf.c:io_gltf_parse()` ignores
@@ -240,10 +406,11 @@ multi-mesh stream are non-null.
 **Impact:** malformed/truncated files, missing external buffers or multi-material
 meshes risk crashes, lost active state, or incomplete import. Do not equate the
 valid triangle regression with broad importer qualification.
-**Smallest approach:** validate lengths, required arrays, buffer load results and
-mesh records before replacing the active project; report a useful error. Address
-multi-primitive semantics with an explicit preservation test, not an inferred
-merge rule. Preserve existing legacy formats and script-trust checks.
+**Implemented approach:** stage checked project data and complete mesh streams,
+validate lengths/arrays/references and buffer-load results before changing active
+work, and propagate failures to callers. Multi-primitive glTF rejection has an
+explicit active-state preservation test. Existing legacy defaults and script-trust
+checks are retained; broader primitive/material semantics remain unsupported.
 **Effort/risk:** 3–5 days initially; format compatibility and partial import cleanup
 are dependencies. **Success:** a focused corrupt/missing-data corpus fails without
 crash or active-project loss; known valid legacy and multi-object fixtures retain

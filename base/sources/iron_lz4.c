@@ -141,71 +141,62 @@ buffer_t *lz4_encode(buffer_t *b) {
 	return result;
 }
 
-buffer_t *lz4_decode(buffer_t *b, uint32_t olen) {
-	u8_array_t *ibuf = (u8_array_t *)b;
-	uint32_t    ilen = ibuf->length;
-	u8_array_t *obuf = u8_array_create(olen);
-	uint32_t    ipos = 0;
-	uint32_t    opos = 0;
-
-	while (ipos < ilen) {
-		uint32_t token = ibuf->buffer[ipos++];
-
-		// Literals
-		uint32_t clen = token >> 4;
-
-		// Length of literals
-		if (clen != 0) {
-			if (clen == 15) {
-				uint32_t l = 0;
-				while (1) {
-					l = ibuf->buffer[ipos++];
-					if (l != 255) {
-						break;
-					}
-					clen += 255;
-				}
-				clen += l;
-			}
-
-			// Copy literals
-			uint32_t end = ipos + clen;
-			while (ipos < end) {
-				obuf->buffer[opos++] = ibuf->buffer[ipos++];
-			}
-			if (ipos == ilen) {
-				break;
-			}
+static bool lz4_read(buffer_t *b, uint32_t olen, uint8_t *out) {
+	if (b == NULL || b->buffer == NULL || b->length == 0) return false;
+	uint32_t ipos = 0, opos = 0;
+	while (ipos < b->length) {
+		uint32_t token = b->buffer[ipos++];
+		uint32_t count = token >> 4;
+		if (count == 15) {
+			uint32_t extra;
+			do {
+				if (ipos == b->length) return false;
+				extra = b->buffer[ipos++];
+				if (count > olen || extra > olen - count) return false;
+				count += extra;
+			} while (extra == 255);
 		}
-
-		// Match
-		uint32_t moffset = ibuf->buffer[ipos + 0] | (ibuf->buffer[ipos + 1] << 8);
-		if (moffset == 0 || moffset > opos) {
-			return NULL;
-		}
+		if (count > b->length - ipos || count > olen - opos) return false;
+		if (out != NULL) memcpy(out + opos, b->buffer + ipos, count);
+		ipos += count;
+		opos += count;
+		if (ipos == b->length) return opos == olen;
+		if (b->length - ipos < 2) return false;
+		uint32_t offset = b->buffer[ipos] | (b->buffer[ipos + 1] << 8);
 		ipos += 2;
-
-		// Length of match
-		clen = (token & 0x0f) + 4;
-		if (clen == 19) {
-			uint32_t l = 0;
-			while (1) {
-				l = ibuf->buffer[ipos++];
-				if (l != 255) {
-					break;
-				}
-				clen += 255;
-			}
-			clen += l;
+		if (offset == 0 || offset > opos) return false;
+		count = (token & 15) + 4;
+		if (count == 19) {
+			uint32_t extra;
+			do {
+				if (ipos == b->length) return false;
+				extra = b->buffer[ipos++];
+				if (count > olen - opos || extra > olen - opos - count) return false;
+				count += extra;
+			} while (extra == 255);
 		}
-
-		// Copy match
-		uint32_t mpos = opos - moffset;
-		uint32_t end  = opos + clen;
-		while (opos < end) {
-			obuf->buffer[opos++] = obuf->buffer[mpos++];
-		}
+		if (count > olen - opos)
+			return false;
+		if (out != NULL)
+			for (uint32_t i = 0; i < count; ++i)
+				out[opos + i] = out[opos + i - offset];
+		opos += count;
 	}
+	return opos == olen;
+}
 
-	return obuf;
+bool lz4_validate(buffer_t *b, uint32_t olen) {
+	return lz4_read(b, olen, NULL);
+}
+
+buffer_t *lz4_decode(buffer_t *b, uint32_t olen) {
+	if (!lz4_validate(b, olen))
+		return NULL;
+	u8_array_t *out = u8_array_create(olen);
+	if (out == NULL || out->buffer == NULL) {
+		free(out);
+		return NULL;
+	}
+	lz4_read(b, olen, out->buffer);
+	return out;
 }
