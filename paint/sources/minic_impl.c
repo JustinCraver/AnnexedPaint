@@ -898,6 +898,29 @@ void script_quit(void) {
 	iron_stop();
 }
 
+void script_assert(bool condition, char *message) {
+	if (!condition) {
+		minic_error_count++;
+		console_error(string("Script assertion failed: %s", message != NULL ? message : ""));
+	}
+}
+
+void script_undo(void) {
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	history_undo();
+	script_gpu_end(current, in_use);
+}
+
+void script_redo(void) {
+	gpu_texture_t *current;
+	bool           in_use;
+	script_gpu_begin(&current, &in_use);
+	history_redo();
+	script_gpu_end(current, in_use);
+}
+
 void script_project_new(void) {
 	gpu_texture_t *current;
 	bool           in_use;

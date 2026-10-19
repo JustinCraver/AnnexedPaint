@@ -65,12 +65,13 @@ static void test3_call(void *fn) {
 	minic_call_fn(fn, args, 1);
 }
 const char *test3 = " \n\
+    int called = 0; \n\
     void test3_fn(int i) { \n\
-        printf(\"3: PASS (1/2)\n\"); \n\
+        called = i; \n\
     } \n\
     float main() { \n\
         test3_call(test3_fn); \n\
-        return 0.0; \n\
+        return called - 2; \n\
     } \n\
 ";
 
@@ -427,12 +428,16 @@ static void minic_test_register_context(void) {
 	minic_register("test_get_context", "p:minic_test_context_t()", mw_test_get_context);
 }
 
-#define MINIC_TEST_EXPECT(n, src, expected)                       \
-	do {                                                          \
-		minic_ctx_t *_c     = minic_eval(src);                    \
-		bool         passed = minic_ctx_result(_c) == (expected); \
-		printf(#n ": %s\n", passed ? "PASS" : "FAIL");            \
-		minic_ctx_free(_c);                                       \
+#define MINIC_TEST_EXPECT(n, src, expected)                                                                                                        \
+	do {                                                                                                                                           \
+		int          errors = minic_error_count;                                                                                                   \
+		minic_ctx_t *ctx    = minic_eval_named(src, "minic test " #n);                                                                             \
+		float        result = minic_ctx_result(ctx);                                                                                               \
+		bool         passed = result == (expected) && ((expected) == -1.0f ? minic_error_count > errors : minic_error_count == errors);            \
+		checks++;                                                                                                                                  \
+		failures += !passed;                                                                                                                       \
+		printf(#n ": %s (result=%g, expected=%g, errors=%d)\n", passed ? "PASS" : "FAIL", result, (double)(expected), minic_error_count - errors); \
+		minic_ctx_free(ctx);                                                                                                                       \
 	} while (0)
 
 #define MINIC_TEST(n, src) MINIC_TEST_EXPECT(n, src, 0.0f)
@@ -446,17 +451,15 @@ static minic_val_t mw_test3_call(minic_val_t *a, int n) {
 	return minic_val_int(0);
 }
 
-void minic_tests() {
+int minic_tests(void) {
+	int checks = 0, failures = 0;
+	test2_var = 3;
 	MINIC_TEST(0, test0);
 	MINIC_TEST(1, test1);
 	minic_register("test2_get", "p(i)", mw_test2_get);
 	MINIC_TEST(2, test2);
 	minic_register("test3_call", "v(p)", mw_test3_call);
-	{
-		minic_ctx_t *_c = minic_eval(test3);
-		minic_ctx_result(_c) == 0.0f ? printf("3: PASS (2/2)\n") : printf("3: FAIL\n");
-		minic_ctx_free(_c);
-	}
+	MINIC_TEST(3, test3);
 	MINIC_TEST(4, test4);
 	MINIC_TEST(5, test5);
 	MINIC_TEST(6, test6);
@@ -614,6 +617,8 @@ void minic_tests() {
 	MINIC_TEST_EXPECT(17, "float main() { int a[2]; return a[2]; }", -1.0f);
 	MINIC_TEST_EXPECT(18, "float main() { test_get_context()->buffer[2] = 99; return 0; }", -1.0f);
 	MINIC_TEST_EXPECT(19, "float main() { minic_test_context_t *p = NULL; return p->ddirty; }", -1.0f);
+	printf("MINIC: %d checks, %d failures\n", checks, failures);
+	return failures;
 }
 
 #endif

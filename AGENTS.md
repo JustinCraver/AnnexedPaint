@@ -58,6 +58,7 @@ do not treat them as cosmetic fixes.
 .\paint\build-windows.ps1 -Rebuild        # Full rebuild
 .\paint\build-windows.ps1 -Configuration Debug
 .\paint\tests\smoke-windows.ps1          # Hidden native runs; GPU required
+.\paint\tests\editor-windows.ps1         # Interpreter + hidden editor/pixel checks
 git diff --check
 ```
 
@@ -66,6 +67,9 @@ The smoke suite checks help, startup and import regressions in a disposable copy
 under `paint/build/tests/`; it does not qualify manual painting, file dialogs,
 stylus input, capture, cloud services or other platforms. No aggregate lint command
 exists. See the development guide for existing demo/test entry points.
+The editor/interpreter command adds selected automated paint, undo, save/reopen
+and export pixel/state checks; `-SkipNative` runs only its standalone interpreter
+checks. These do not qualify manual/device painting or other platforms.
 
 ## Project Space integration
 

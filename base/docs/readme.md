@@ -98,6 +98,8 @@ already written; it reports failure rather than claiming a complete export.
 .\paint\tests\export-windows.ps1 -SkipNative  # image writer and encoder checks
 .\paint\tests\import-windows.ps1
 .\paint\tests\import-windows.ps1 -SkipNative  # decoder, mesh stream and glTF checks without a GPU
+.\paint\tests\editor-windows.ps1
+.\paint\tests\editor-windows.ps1 -SkipNative  # standalone interpreter checks without a GPU
 git diff --check
 ```
 
@@ -174,19 +176,47 @@ The checks do not qualify all malformed inputs/codecs, every historical project,
 OBJ/Blender/FBX parser internals, interactive dialogs/painting, other platforms,
 or resource exhaustion and GPU allocation failures during reconstruction.
 
+The editor/interpreter command compiles and runs all 39 existing minic checks,
+including expected compile/runtime errors and a native-to-script callback value.
+The standalone host uses production interpreter/math code with controlled scene
+and formatting bindings; it does not qualify the editor's full API registry.
+An injected failing assertion must return **1**. `-SkipNative` stops after these
+checks and does not claim editor/GPU coverage. To verify the command's own failure
+status, run `./paint/tests/editor-windows.ps1 -SkipNative -InjectFailure`; this
+deliberately fails and retains its results.
+
+The full command runs the existing `paint/assets/plugins/dev/test.c` exercise in
+a fresh hidden runtime with a supplied output root containing spaces and a dot.
+It requires 43 state/output assertions and six more after a fresh-process reopen,
+plus nonzero status for a deliberately failed script assertion. Separate PNG
+decoding checks every pixel for brush/world strokes, erasing, fill, exact undo/redo,
+save/reopen and repaint/resave. Five exported channels must round-trip exactly;
+an isolated known-color layer checks base RGB, normal, occlusion, roughness and
+metallic values and grayscale/RGB layouts. Missing outputs and unequal images
+must fail. Every process has a 30-second limit, without crash retries. Logs,
+generated scripts, source/output/executable hashes and `results.json` remain in
+`paint/build/tests/editor-<id>/`.
+
+Like the smoke runner, `-Executable` can select another binary while runtime data
+comes from this checkout's `paint/build/out/data`. If the staged executable is in
+use, an already successful build at `paint/build/x64/Release/ArmorPaint.exe` can
+be tested directly without closing the running editor. This command verifies
+selected automated Windows/Direct3D12 workflows, not manual painting quality,
+dialogs, stylus/device input, physics, every export preset/bit depth, other
+platforms or hosted CI.
+
 Other existing checks have narrower or different purposes:
 
 - `base/tests/triangle`, `cube`, and `fall` are graphical sample applications.
   Run `..\..\make.bat` from the selected sample directory to generate its project.
   They are not an automated editor regression suite.
-- `base/sources/libs/minic_tests.c` contains interpreter checks, but there is no
-  checked-in command-line runner calling `minic_tests()`. It prints PASS/FAIL;
-  compiling that file into the app does not execute the checks.
-- `paint/assets/plugins/dev/test.c` is a scripted editor exercise with 26 expected
-  checks. It uses `/tmp/armorpaint`, replaces project state, and is not included by
-  the normal `assets/plugins/*` packaging rule. Run only in a disposable runtime
-  with its output root adapted there. Some checks merely confirm a call completed;
-  `TEST PASS` alone is not pixel-level or persistence qualification.
+- `base/sources/libs/minic_tests.c` returns an aggregate failure count to
+  `paint/tests/minic-runner.c`. Compiling it into the app does not execute it;
+  use the editor/interpreter command above.
+- `paint/assets/plugins/dev/test.c` replaces project state and is not included by
+  the normal `assets/plugins/*` packaging rule. The runner appends its `main()`
+  calling `test_begin(output_root, mode)` and checks both script results and
+  decoded outputs. Run it through the disposable command above.
 - There is no repository-wide test or lint command. Use targeted assertions,
   compiler diagnostics, `git diff --check`, and native workflow checks. Format only
   touched C sections with the existing `.clang-format` when useful.

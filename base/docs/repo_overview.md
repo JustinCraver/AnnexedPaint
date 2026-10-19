@@ -99,6 +99,15 @@ build input. Engine `iron_file_write.c` is compiled by the existing base wildcar
    running editor using files in its application-data `agent` directory. It is
    not a stateless headless editor. Preserve imported script trust prompts and
    session/restore behavior; concurrent-client handling is not qualified here.
+   `script_assert()` records a script error on failure, including from frame
+   callbacks, so CLI execution returns nonzero. `script_undo()`/`script_redo()`
+   use the existing history owner while preserving the active GPU draw context.
+   A layer's exposed `texpaint` is a borrowed texture; reacquire it after history
+   operations or project changes. `script_get_texture_pixels()` reuses the
+   texture's readback buffer, so copy bytes when retaining a snapshot. The
+   repeatable local editor/interpreter command is documented in the development
+   guide; its standalone host bindings and native pixel evidence have distinct
+   scopes.
 
 ## Platform and feature boundaries
 

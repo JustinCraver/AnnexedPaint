@@ -1,412 +1,309 @@
+// editor-windows.ps1 appends main() with a disposable root and mode.
 #include "global.h"
 
-char *tmp_root = "/tmp/armorpaint";
-char *dir_textures;
-char *dir_project;
-char *dir_mesh;
-char *dir_material;
-char *file_project;
-
-int step     = 0;
-int checks   = 0;
-int failures = 0;
-
+char            *tmp_root;
+char            *mode;
+char            *file_project;
+int              step     = 0;
+int              checks   = 0;
+int              failures = 0;
 slot_material_t *mat_noise;
 
 void check(int ok, char *name) {
-	checks += 1;
+	checks++;
 	if (ok) {
 		printf("[test]   ok   %s", name);
 	}
 	else {
-		failures += 1;
+		failures++;
 		printf("[test]   FAIL %s", name);
 	}
 }
 
-int dir_file_count(char *path) {
-	any_array_t *files = file_read_directory(path);
-	if (files == NULL) {
+int capture(char *name) {
+	slot_layer_t *layer = script_layer_get("test_paint");
+	if (layer == NULL || layer->texpaint == NULL) {
 		return 0;
 	}
-	return files->length;
+	gpu_texture_t *image  = layer->texpaint;
+	buffer_t      *pixels = script_get_texture_pixels(image);
+	if (pixels == NULL || image->width != 2048 || image->height != 2048 || pixels->length != 2048 * 2048 * 4) {
+		return 0;
+	}
+	return iron_write_png(string("%s/%s.png", tmp_root, name), pixels, image->width, image->height, 0);
 }
 
-// 0 - Tools
+void finished(int expected_checks) {
+	if (checks != expected_checks) {
+		failures++;
+		printf("[test]   FAIL expected %d checks, ran %d", expected_checks, checks);
+	}
+	printf("[test] %d checks, %d failures", checks, failures);
+	if (failures == 0) {
+		printf("TEST PASS %s", mode);
+	}
+	else {
+		printf("TEST FAIL %s", mode);
+	}
+	// CLI observes the final assertion and returns nonzero. Both outcomes use
+	// automatic CLI completion; no script_quit() bypasses shutdown.
+	script_assert(failures == 0, "editor exercise failed");
+}
 
-void step_tools() {
-	context_t *ctx = script_get_context();
-	int        ok  = 1;
-	for (int i = 0; i < 14; ++i) {
-		context_select_tool(i);
-		if (ctx->tool != i) {
-			ok = 0;
+void verify_state(float opacity) {
+	slot_layer_t *layer = script_layer_get("test_paint");
+	check(script_layer_count() == 2 && layer != NULL && layer->mask_opacity == opacity, "layer count, name and opacity round trip");
+	slot_material_t *material = script_get_material("test_noise");
+	check(material != NULL, "named material round trip");
+	if (material != NULL) {
+		script_material_set(material);
+		ui_node_t *noise = script_material_get_node("TEX_NOISE");
+		if (noise != NULL) {
+			ui_node_socket_t *scale = noise->inputs->buffer[1];
+			check(scale->default_value->buffer[0] == 8.0, "material node scale round trip");
 		}
 	}
-	check(ok, "select all tools");
-	context_select_tool(TOOL_TYPE_BRUSH);
+	check(script_get_object("test_shape") != NULL && script_get_object("test_shape_copy") != NULL, "named geometry round trip");
 }
 
-// 1 - Brush stroke
-
-void step_paint_brush() {
-	context_t *ctx = script_get_context();
-	context_select_tool(TOOL_TYPE_BRUSH);
-	ctx->brush_radius   = 0.5;
-	ctx->brush_opacity  = 1.0;
-	ctx->brush_hardness = 0.8;
-	ctx->brush_scale    = 1.0;
-
-	for (int i = 0; i < 8; ++i) {
-		float t = i * 0.125;
-		script_paint(0.35 + t * 0.3, 0.3 + t * 0.4);
-	}
-	script_paint_end();
-
-	for (int i = 0; i < 4; ++i) {
-		float t = i * 0.25;
-		script_paint(0.65 - t * 0.3, 0.3 + t * 0.4);
-	}
-	script_paint_end();
-	check(1, "brush strokes");
+void verify_fresh_process() {
+	verify_state(0.75);
+	check(capture("fresh"), "fresh process layer pixels captured");
+	check(export_texture_run(string("%s/fresh", tmp_root), false), "fresh process texture export completed");
+	finished(6);
 }
 
-// 2 - Eraser and world-space painting
-
-void step_paint_eraser() {
-	context_select_tool(TOOL_TYPE_ERASER);
-	script_paint(0.5, 0.5);
-	script_paint(0.52, 0.54);
-	script_paint(0.56, 0.58);
-	script_paint_end();
-
-	context_select_tool(TOOL_TYPE_BRUSH);
-	script_paint_world(0.0, 0.0, 0.0);
-	script_paint_world(0.1, 0.0, 0.1);
-	script_paint_end();
-	check(1, "eraser and world-space strokes");
-}
-
-// 3 - Fill
-
-void step_fill() {
-	script_fill_layer();
-	check(1, "fill layer");
-}
-
-// 4 - Material nodes
-
-void step_material_create() {
+void create_material() {
 	mat_noise = script_material_create("test_noise");
-	int ok    = 0;
-	if (mat_noise != NULL) {
-		ok = 1;
-	}
-	check(ok, "material created");
-
+	check(mat_noise != NULL, "material created");
 	ui_node_t *noise = script_material_create_node_at("TEX_NOISE", -700.0, 0.0);
 	ui_node_t *rgb   = script_material_create_node_at("RGB", -700.0, 400.0);
 	ui_node_t *mix   = script_material_create_node_at("MIX_RGB", -350.0, 0.0);
 	ui_node_t *out   = script_material_get_node("OUTPUT_MATERIAL_PBR");
-
-	ok = 0;
-	if (noise != NULL) {
-		if (rgb != NULL) {
-			if (mix != NULL) {
-				if (out != NULL) {
-					ok = 1;
-				}
-			}
-		}
-	}
+	int        ok    = noise != NULL && rgb != NULL && mix != NULL && out != NULL;
 	check(ok, "material nodes created");
 	if (!ok) {
 		return;
 	}
-
-	script_material_set_float(noise, 1, 1, 8.0); // Scale
-	script_material_set_float(noise, 1, 2, 4.0); // Detail
-	script_material_set_color(rgb, 0, 0, 0.9, 0.25, 0.1, 1.0);
-	script_material_set_vector(noise, 1, 0, 0.0, 0.0, 0.0);
-	script_material_set_button(mix, 0, 0.0);
-
+	script_material_set_float(noise, true, 1, 8.0);
 	script_material_connect(noise, 0, mix, 0);
 	script_material_connect(rgb, 0, mix, 1);
 	script_material_connect(mix, 0, out, 0);
 	script_material_update();
-
-	ui_node_t *found = script_material_get_node("TEX_NOISE");
-	ok               = 0;
-	if (found != NULL) {
-		if (script_material_get_node_id(found->id) == found) {
-			ok = 1;
-		}
-	}
-	check(ok, "material node lookup");
-}
-
-// 5 - Material edit, assign, delete
-
-void step_material_edit() {
-	ui_node_t *mix = script_material_get_node("MIX_RGB");
-	ui_node_t *rgb = script_material_get_node("RGB");
-	if (mix != NULL) {
-		script_material_disconnect(mix, 1);
-	}
-	if (rgb != NULL) {
-		script_material_remove_node(rgb);
-	}
+	check(script_material_get_node_id(noise->id) == noise, "material node lookup");
+	int links      = mat_noise->canvas->links->length;
+	int nodes      = mat_noise->canvas->nodes->length;
+	int removed_id = rgb->id;
+	script_material_disconnect(mix, 1);
+	script_material_remove_node(rgb);
 	script_material_update();
-	check(1, "material node disconnect and remove");
-
-	mesh_object_t *mo = context_main_object();
-	if (mo != NULL) {
-		script_object_set_material(mo->base, mat_noise);
-	}
-
-	slot_material_t *tmp = script_material_create("test_temp");
-	script_material_delete(tmp);
-	int ok = 0;
-	if (script_get_material("test_temp") == NULL) {
-		ok = 1;
-	}
-	check(ok, "material deleted");
-
+	check(script_material_get_node_id(removed_id) == NULL && mat_noise->canvas->nodes->length == nodes - 1 && mat_noise->canvas->links->length == links - 1,
+	      "material node disconnect and remove");
+	slot_material_t *temporary = script_material_create("test_temp");
+	check(temporary != NULL, "temporary material created");
+	script_material_delete(temporary);
+	check(script_get_material("test_temp") == NULL, "temporary material deleted");
 	script_material_set(mat_noise);
 }
 
-// 6 - Shapes and object duplication
-
-void step_shapes() {
+void create_shapes() {
 	string_array_t *shapes = script_shape_list();
-	int             ok     = 0;
-	if (shapes != NULL) {
-		if (shapes->length > 0) {
-			ok = 1;
-		}
-	}
-	check(ok, "shape list");
-	if (!ok) {
+	check(shapes != NULL && shapes->length > 0, "shape list");
+	if (shapes == NULL || shapes->length == 0) {
 		return;
 	}
-
-	object_t *o = script_shape_add(shapes->buffer[0]);
-	ok          = 0;
-	if (o != NULL) {
-		ok = 1;
-	}
-	check(ok, "shape added");
-	if (!ok) {
+	object_t *object = script_shape_add(shapes->buffer[0]);
+	check(object != NULL, "shape added");
+	if (object == NULL) {
 		return;
 	}
-
-	object_t *dup = script_object_duplicate(o);
-	ok            = 0;
-	if (dup != NULL) {
-		ok = 1;
+	script_object_set_name(object, "test_shape");
+	object_t *copy = script_object_duplicate(object);
+	check(copy != NULL && copy != object, "distinct object duplicated");
+	if (copy != NULL) {
+		script_object_set_name(copy, "test_shape_copy");
 	}
-	check(ok, "object duplicated");
-
-	script_object_set_material(o, mat_noise);
-	script_physics_set_shape(o, PHYSICS_SHAPE_BOX);
-	script_physics_set_mass(o, 1.0);
-	script_physics_apply_impulse(o, 0.0, 0.0, 1.0);
-	script_physics_set_velocity(o, 0.0, 0.0, 0.0);
-	script_physics_sync_transform(o);
-	check(1, "physics body");
-}
-
-// 7 - Export textures
-
-void step_export_textures() {
-	export_texture_run(dir_textures, false);
-	check(dir_file_count(dir_textures) > 0, "textures exported");
-}
-
-// 8 - Export mesh and material
-
-void step_export_mesh() {
-	script_export_mesh(string("%s/test_mesh", dir_mesh));
-	check(iron_file_exists(string("%s/test_mesh.obj", dir_mesh)), "mesh exported");
-
-	script_export_material(string("%s/test_material.arm", dir_material));
-	check(iron_file_exists(string("%s/test_material.arm", dir_material)), "material exported");
-}
-
-// 9 - Save project
-
-void step_save() {
-	project_filepath_set(file_project);
-	project_save(false);
-	check(string_equals(project_filepath_get(), file_project), "project filepath set");
-}
-
-// 10 - Saved file is on disk
-
-void step_verify_save() {
-	check(iron_file_exists(file_project), "project saved");
-}
-
-// 11 - New project
-
-void step_new_project() {
-	script_project_new();
-	int ok = 0;
-	if (context_main_object() != NULL) {
-		ok = 1;
-	}
-	check(ok, "new project");
-}
-
-// 12 - Load the saved project back
-
-void step_load() {
-	script_project_open(file_project);
-	check(1, "project loaded");
-}
-
-// 13 - Loaded content is there
-
-void step_verify_load() {
-	int ok = 0;
-	if (context_main_object() != NULL) {
-		ok = 1;
-	}
-	check(ok, "paint object after load");
-
-	ok = 0;
-	if (script_get_material("test_noise") != NULL) {
-		ok = 1;
-	}
-	check(ok, "material survived save and load");
-}
-
-// 14 - Import one of the exported textures back in
-
-void step_import_texture() {
-	any_array_t *files = file_read_directory(dir_textures);
-	int          ok    = 0;
-	if (files != NULL) {
-		if (files->length > 0) {
-			char *name = files->buffer[0];
-			script_import_asset(string("%s/%s", dir_textures, name), false);
-			if (script_get_texture(name) != NULL) {
-				script_texture_delete(name);
-				if (script_get_texture(name) == NULL) {
-					ok = 1;
-				}
-			}
-			script_import_asset(string("%s/%s", dir_textures, name), false);
-		}
-	}
-	check(ok, "texture imported, deleted and reimported");
-}
-
-// 15 - Import the exported mesh
-
-void step_import_mesh() {
-	char *path = string("%s/test_mesh.obj", dir_mesh);
-	script_import_asset(path, false);
-	check(1, "mesh imported");
-}
-
-// 16 - Import the exported material
-
-void step_import_material() {
-	script_import_asset(string("%s/test_material.arm", dir_material), false);
-	check(1, "material imported");
-}
-
-// 17 - Paint once more on the reloaded project, then save over it
-
-void step_repaint_and_resave() {
-	context_select_tool(TOOL_TYPE_BRUSH);
-	script_paint(0.45, 0.45);
-	script_paint(0.5, 0.5);
-	script_paint_end();
-	project_save(false);
-	check(1, "repaint and resave");
 }
 
 void run_step(int s) {
-	if (s == 0)
-		step_tools();
-	else if (s == 1)
-		step_paint_brush();
-	else if (s == 2)
-		step_paint_eraser();
-	else if (s == 3)
-		step_fill();
-	else if (s == 4)
-		step_material_create();
-	else if (s == 5)
-		step_material_edit();
-	else if (s == 6)
-		step_shapes();
-	else if (s == 7)
-		step_export_textures();
-	else if (s == 8)
-		step_export_mesh();
-	else if (s == 9)
-		step_save();
-	else if (s == 10)
-		step_verify_save();
-	else if (s == 11)
-		step_new_project();
-	else if (s == 12)
-		step_load();
-	else if (s == 13)
-		step_verify_load();
-	else if (s == 14)
-		step_import_texture();
-	else if (s == 15)
-		step_import_mesh();
-	else if (s == 16)
-		step_import_material();
-	else if (s == 17)
-		step_repaint_and_resave();
+	if (s == 0) {
+		context_t *ctx = script_get_context();
+		int        ok  = 1;
+		for (int i = 0; i < 14; ++i) {
+			context_select_tool(i);
+			if (ctx->tool != i) {
+				ok = 0;
+			}
+		}
+		check(ok, "select all original tools");
+		context_select_tool(TOOL_TYPE_BRUSH);
+		slot_layer_t *layer = script_layer_new();
+		check(layer != NULL, "transparent paint layer created");
+		script_layer_set_name(layer, "test_paint");
+	}
+	else if (s == 1) {
+		check(capture("empty"), "baseline pixels captured");
+		context_t *ctx      = script_get_context();
+		ctx->brush_radius   = 0.5;
+		ctx->brush_opacity  = 1.0;
+		ctx->brush_hardness = 0.8;
+		ctx->brush_scale    = 1.0;
+		for (int i = 0; i < 8; ++i) {
+			float t = i * 0.125;
+			script_paint(0.35 + t * 0.3, 0.3 + t * 0.4);
+		}
+		script_paint_end();
+	}
+	else if (s == 2) {
+		check(capture("paint"), "brush pixels captured for change assertion");
+		script_undo();
+	}
+	else if (s == 3) {
+		check(capture("undo"), "undo pixels captured for baseline assertion");
+		script_redo();
+	}
+	else if (s == 4) {
+		check(capture("redo"), "redo pixels captured for painted assertion");
+		context_select_tool(TOOL_TYPE_ERASER);
+		script_paint(0.45, 0.43);
+		script_paint(0.50, 0.50);
+		script_paint_end();
+	}
+	else if (s == 5) {
+		check(capture("erased"), "eraser pixels captured for alpha assertion");
+		context_select_tool(TOOL_TYPE_BRUSH);
+		script_paint_world(0.0, 0.0, 0.0);
+		script_paint_end();
+	}
+	else if (s == 6) {
+		check(capture("world"), "world stroke pixels captured for change assertion");
+		script_fill_layer();
+	}
+	else if (s == 7) {
+		check(capture("filled"), "fill pixels captured for change assertion");
+		create_material();
+	}
+	else if (s == 8) {
+		create_shapes();
+		slot_layer_t *layer = script_layer_get("test_paint");
+		if (layer != NULL) {
+			layer->mask_opacity = 0.625;
+		}
+	}
+	else if (s == 9) {
+		// Export only the reference layer so blending with painted normals cannot
+		// change the known values. Restore the two saved layers afterwards.
+		slot_layer_t *background = script_layer_at(0);
+		slot_layer_t *paint      = script_layer_get("test_paint");
+		background->visible      = false;
+		if (paint != NULL) {
+			paint->visible = false;
+		}
+		slot_layer_t *reference = script_layer_new_color(0xff336699, 1.0, 0.25, 0.0);
+		check(reference != NULL, "known color export layer created");
+		check(export_texture_run(string("%s/known", tmp_root), false), "known color texture export completed");
+		script_layer_delete(reference);
+		background->visible = true;
+		if (paint != NULL) {
+			paint->visible = true;
+		}
+		check(script_layer_count() == 2, "temporary export layer removed");
+		check(export_texture_run(string("%s/textures", tmp_root), false), "texture export completed");
+		script_export_mesh(string("%s/test_mesh", tmp_root));
+		check(iron_file_exists(string("%s/test_mesh.obj", tmp_root)), "mesh export exists");
+		script_export_material(string("%s/test_material.arm", tmp_root));
+		check(iron_file_exists(string("%s/test_material.arm", tmp_root)), "material export exists");
+		project_filepath_set(file_project);
+		sys_title_set("test_pending* - ArmorPaint");
+		project_save(false);
+		check(string_equals(sys_title(), "test_pending* - ArmorPaint"), "deferred save retains dirty title");
+	}
+	else if (s == 10) {
+		check(iron_file_exists(file_project) && string_index_of(sys_title(), "* - ") < 0, "save completed and cleared dirty title");
+		check(string_equals(string_replace_all(project_filepath_get(), "\\", "/"), file_project), "saved filepath committed");
+		script_project_new();
+	}
+	else if (s == 11) {
+		check(script_layer_get("test_paint") == NULL && script_get_material("test_noise") == NULL, "new project clears saved fixture");
+		script_project_open(file_project);
+	}
+	else if (s == 12) {
+		verify_state(0.625);
+		check(capture("reopened"), "reopened layer pixels captured");
+		check(export_texture_run(string("%s/after", tmp_root), false), "reopened texture export completed");
+		slot_layer_t *layer = script_layer_get("test_paint");
+		if (layer != NULL) {
+			script_layer_set(layer);
+			layer->mask_opacity = 0.75;
+		}
+		context_select_tool(TOOL_TYPE_ERASER);
+		script_paint(0.45, 0.45);
+		script_paint(0.5, 0.5);
+		script_paint_end();
+	}
+	else if (s == 13) {
+		check(capture("resaved"), "edited reopened pixels captured");
+		check(export_texture_run(string("%s/resaved", tmp_root), false), "edited texture export completed");
+		sys_title_set("test_pending* - ArmorPaint");
+		project_save(false);
+	}
+	else if (s == 14) {
+		check(iron_file_exists(file_project) && string_index_of(sys_title(), "* - ") < 0, "replacement save completed");
+		script_import_asset(string("%s/textures/untitled_base.png", tmp_root), false);
+	}
+	else if (s == 15) {
+		gpu_texture_t *image = script_get_texture("untitled_base.png");
+		check(image != NULL && image->width == 2048 && image->height == 2048, "exported texture imported with dimensions");
+		script_texture_delete("untitled_base.png");
+		check(script_get_texture("untitled_base.png") == NULL, "texture deleted");
+		script_import_asset(string("%s/textures/untitled_base.png", tmp_root), false);
+	}
+	else if (s == 16) {
+		check(script_get_texture("untitled_base.png") != NULL, "texture reimported");
+		script_project_new();
+	}
+	else if (s == 17) {
+		script_import_asset(string("%s/test_mesh.obj", tmp_root), false);
+	}
+	else if (s == 18) {
+		check(script_get_object("test_shape") != NULL && script_get_object("test_shape_copy") != NULL, "exported named mesh objects imported");
+		check(script_get_material("test_noise") == NULL, "material absent before import");
+		script_import_asset(string("%s/test_material.arm", tmp_root), false);
+	}
+	else if (s == 19) {
+		check(script_get_material("test_noise") != NULL, "exported named material imported");
+	}
 }
-
-int step_count      = 18;
-int expected_checks = 26;
 
 void next_frame() {
-	printf("[test] step %d of %d", step + 1, step_count);
+	printf("[test] step %d of 20", step + 1);
 	run_step(step);
-
-	step += 1;
-	if (step < step_count) {
+	step++;
+	if (step < 20) {
 		script_notify_on_next_frame(next_frame);
-		return;
-	}
-
-	if (checks != expected_checks) {
-		failures += 1;
-		printf("[test]   FAIL expected %d checks, ran %d - a step was cut short", expected_checks, checks);
-	}
-	printf("[test] %d checks, %d failures", checks, failures);
-	if (failures == 0) {
-		printf("TEST PASS");
 	}
 	else {
-		printf("TEST FAIL");
+		finished(43);
 	}
-	script_quit();
 }
 
-void main() {
-	dir_textures = string("%s/textures", tmp_root);
-	dir_project  = string("%s/project", tmp_root);
-	dir_mesh     = string("%s/mesh", tmp_root);
-	dir_material = string("%s/material", tmp_root);
-	file_project = string("%s/test_project.arm", dir_project);
+void deliberate_failure() {
+	check(0, "deliberate assertion failure in a frame callback");
+	finished(1);
+}
 
-	iron_create_directory(tmp_root);
-	iron_create_directory(dir_textures);
-	iron_create_directory(dir_project);
-	iron_create_directory(dir_mesh);
-	iron_create_directory(dir_material);
-
-	printf("[test] output directory %s", tmp_root);
-	script_notify_on_next_frame(next_frame);
+void test_begin(char *output_root, char *test_mode) {
+	tmp_root     = output_root;
+	mode         = test_mode;
+	file_project = string_copy(string("%s/test_project.arm", tmp_root));
+	if (string_equals(mode, "failure")) {
+		script_notify_on_next_frame(deliberate_failure);
+	}
+	else if (string_equals(mode, "reopen")) {
+		script_project_open(file_project);
+		script_notify_on_next_frame(verify_fresh_process);
+	}
+	else {
+		script_notify_on_next_frame(next_frame);
+	}
 }

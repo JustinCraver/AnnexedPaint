@@ -10,8 +10,8 @@ P1-03 began at the same base with that uncommitted P1-02 work present and
 preserved; the P1-03 implementation and evidence below are also uncommitted.
 
 These began as **recommendations, not approved roadmap commitments**. P1-01,
-P1-02 and P1-03 were subsequently explicitly requested for implementation; the other items remain
-proposals. No separate
+P1-02, P1-03 and P2-04 were subsequently explicitly requested for implementation;
+the other items remain proposals. No separate
 Annexed product specification, roadmap, prior review or Space binding was found.
 Upstream application identity, licenses and platform recipes remain intentional
 baseline context; this review does not authorize a rebrand or platform removal.
@@ -324,13 +324,80 @@ or broader glTF primitive/material semantics. The initial P1-03 safety boundary
 is implemented with the focused cases above; multi-primitive import remains
 explicitly unsupported rather than silently incomplete.
 
+## P2-04 implementation and verification (2026-10-19)
+
+**Implemented locally:** one command, `./paint/tests/editor-windows.ps1`, runs the
+existing interpreter and editor exercises with aggregate failure status and
+retained evidence. Work started from clean `main` at
+`27ffe244744a25aa0b8463824f3edacf2845f342`; these implementation, test and
+documentation changes remain uncommitted.
+
+- `minic_tests()` now returns its failure count. All 39 cases check result and
+  error-count behavior, including expected parser/runtime rejections. The native
+  callback case asserts the received argument instead of only printing a message.
+  The small standalone host uses production interpreter/math code with controlled
+  scene and formatting bindings; this is distinct from editor API qualification.
+- The existing editor script takes its output root/mode through
+  `test_begin(output_root, mode)`. The runner supplies a fresh directory with
+  spaces and a dot, generated entry points, matching runtime data and no copied
+  user config. Failed script assertions use `script_assert()` and the existing
+  CLI error path, including deferred callbacks. Success uses automatic CLI
+  completion. History calls preserve the draw context; layer texture readback
+  is exposed through its existing borrowed texture.
+- The exercise checks 43 state/output assertions, then six more in a fresh
+  process: layer name/count/opacity, named geometry and material node values,
+  completed saves and replacement saves, texture delete/reimport and exported
+  OBJ/material reimports. Independent PNG decoding checks every pixel for brush,
+  eraser, world stroke, fill, undo/redo, save/reopen and repaint/resave behavior.
+  Five texture channels round-trip exactly. An isolated reference layer checks
+  known RGB/grayscale values; the neutral normal expectation follows the existing
+  8-bit clear and whiteout blend. No renderer/encoding behavior was changed.
+
+| Check | Actual result / ignored local evidence |
+| --- | --- |
+| Windows x64 / Direct3D12 Release compilation/link | Passed with existing warnings. `paint/build/review-2026-10-19/p2-04-final-5e0324a860a243b1932c13fc9b1dc415/build.log`; source and executable hashes are beside it. |
+| Complete editor/interpreter command | **60/60 runner checks passed**, no timeouts. `paint/build/tests/editor-5156661914484de48fb25fd8f823ece0/results.json`; includes **39 interpreter checks**, **43 + 6 editor assertions**, decoded pixel comparisons and failure controls. |
+| Observable painting and persistence | Brush changed **84,736** pixels, erasing reduced alpha on **18,819**, world stroke changed **5,539**, fill changed **2,727,681**, and repaint erased **4,160**. Undo, redo, saved-layer reopen, fresh-process replacement reopen and both five-channel export comparisons match exactly. Per-check decoder logs and output hashes are in the same run. |
+| Deliberate failures | The minic control and deferred editor assertion return **1**; missing output, unequal images and wrong known values are rejected. The command itself with `-SkipNative -InjectFailure` returned **1**, retained at `paint/build/tests/editor-81a6f0023f154a2d823866260fcd8bdd/`. |
+| Existing startup/import smoke suite | **8/8 passed**, exits zero. `paint/build/tests/9f4f7368723d4da7aa02483fb54424a1/results.json`. |
+| Final diff/documentation/source check | `git diff --check` passed; all **27** checked local Markdown links resolve. All **14** recorded source hashes still match the final successful runner receipt. |
+
+Tested executable SHA-256:
+`E28A03E2CB57A6773012E69C5CBC64C3662810ADF805F453D299A6F431811CD7`.
+The normal build helper compiled successfully but its final staging copy failed
+because `paint/build/out/ArmorPaint.exe` was in use
+(`p2-04-4320a6c866d54275983c0bae99bf8434/build.log` in the review directory).
+The running editor was left alone. The final direct MSBuild check passed, and
+native commands used `-Executable ./paint/build/x64/Release/ArmorPaint.exe`,
+copied into disposable runtimes. The staged executable was not replaced.
+
+Early standalone host/link, generic-container compiler-flag and memory-only PNG
+decoder harness failures remain in `editor-8426d1e8285b46388489f2bf3080fd18`,
+`editor-bbcfc5268ac14263b31be0297f2881d9` and
+`editor-28f37df0db5e4592b74d1c8fe46a2c09` under `paint/build/tests/`.
+`editor-2f7e8350e53d40c6a977a3c947dfc8d6` exposed a fixture assumption that removing
+one RGB node removed the default RGB node too; the final check verifies node ID,
+node count and link count. Expanded reference fixtures initially assumed RGB
+storage for grayscale outputs and unquantized neutral normals
+(`editor-c1c733a958864193acc769c14ab26b37`,
+`editor-1d7c3e040ec7477387bed3bb08d944a1`). Those expectations were reconciled
+with the preset, clear and shader source; failures and their original outputs
+remain. The 30-second process limits and failure assertions were retained.
+
+No CI/framework was added. See the [development guide](readme.md) for the command,
+`-SkipNative`, explicit failure injection and binary selection. These selected
+automated Windows/Direct3D12 fixtures do not qualify manual paint quality,
+dialogs/stylus/device input, physics, every preset/bit depth, other platforms,
+browser/cloud services or hosted CI. Earlier save/export/import qualification
+limits remain in force.
+
 ## Recommended next actions
 
-1. **P2-04: make the existing editor/interpreter checks repeatable.** The focused
-   save/export/import commands now exist; the older interpreter/editor exercises
-   still have the limitations recorded below. This remains a proposal.
+1. **P2-05: decide capture destination/confirmation behavior before its UI work.**
+   The proposed bounded capture work remains as described below; no filename or
+   picker policy has been selected by the completed P2-04 test work.
 
-P1-01, P1-02 and the bounded P1-03 changes are implemented with the evidence and
+P1-01, P1-02, the bounded P1-03 changes and P2-04 are implemented with the evidence and
 limits above. A later decision is
 needed on the fork's supported-platform and product direction (P2-06); it need
 not block these bounded correctness work items.
@@ -418,16 +485,19 @@ geometry, materials and references.
 
 ### P2-04 — Make existing editor/interpreter checks repeatable and meaningful
 
-**Confirmed development gap:** `minic_tests.c` has no checked-in invocation;
+**Status:** implemented locally; the repeatable Windows command, failure controls,
+pixel/state evidence and remaining qualification limits are recorded above.
+
+**Original confirmed development gap:** `minic_tests.c` has no checked-in invocation;
 `paint/assets/plugins/dev/test.c` hardcodes a Unix output root, prints failure
 while returning zero, and uses unconditional `check(1, ...)` for several painting
 and import steps. The new smoke runner covers the fixes here, not those workflows.
 
-**Smallest approach:** add a small local entry point for minic with an aggregate
-failure result; parameterize the editor exercise's output root and strengthen
-its save/paint/undo/export assertions. Reuse the existing script mechanism and
-disposable-runtime approach. **No new CI or testing framework is proposed as part
-of this review.**
+**Implemented approach:** a small local minic entry point returns aggregate
+failure; the editor exercise takes an output root and uses the existing script
+and disposable-runtime mechanisms. Save/paint/undo/export checks now assert
+decoded pixels and saved state, and deliberate failures verify command status.
+No CI or testing framework was added.
 **Effort/risk:** 2–4 days; GPU availability and deferred callbacks affect execution.
 **Success:** one documented local command reports failed assertions as failure,
 retains logs, and checks representative pixel/state round trips rather than only
@@ -468,7 +538,7 @@ milestone. Review proposals remain proposals until accepted.
 
 ## Limits and handoff
 
-Not verified: interactive dialogs, stylus/touch input, visual paint/undo fidelity,
+Not verified: interactive dialogs, stylus/touch input, manual visual paint/undo fidelity,
 all texture bit depths and export presets, legacy/corrupt-file compatibility,
 ray-traced baking, timeline/video output, neural models, account/cloud services,
 MCP concurrency/restore, player packaging, Linux/macOS/mobile/WASM, hosted CI,

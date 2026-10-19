@@ -239,4 +239,4 @@ static inline minic_val_t minic_val_cast(minic_val_t v, minic_type_t t) {
 	return minic_val_coerce(minic_val_to_d(v), t);
 }
 
-void minic_tests();
+int minic_tests(void);
